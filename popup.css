@@ -1,0 +1,609 @@
+/**
+ * popup.css — Streak Extension Styles
+ *
+ * Design system:
+ *   Dark background with an orange/amber accent colour (Tailwind orange-500).
+ *   All colours are defined as CSS custom properties in :root so they can be
+ *   changed in one place. No external fonts or icon libraries needed.
+ *
+ * Section map (Ctrl+F to jump):
+ *   1. Reset & custom properties
+ *   2. Base / layout
+ *   3. Header (streak count)
+ *   4. Stats bar
+ *   5. View toggle (Monthly / Yearly pills)
+ *   6. Calendar area wrapper
+ *   7. Monthly view — nav, day headers, grid, cell states
+ *   8. Yearly view  — nav, heatmap grid, month labels
+ *   9. Mark Today button & note panel
+ *  10. Tooltip
+ *  11. Animations & transitions
+ */
+
+/* ── 1. Reset & custom properties ─────────────────────────────────────────── */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/**
+ * Colour palette legend:
+ *   --bg         deepest background (popup body)
+ *   --surface    one step up from bg (textarea bg)
+ *   --card       card / calendar container backgrounds
+ *   --border     subtle border (card outlines)
+ *   --border2    slightly lighter border (interactive elements)
+ *   --text       primary text
+ *   --muted      secondary / label text
+ *   --muted2     tertiary (disabled date numbers)
+ *   --orange     accent — primary CTAs, streak count, completed cells
+ *   --orange-h   hover state for orange elements
+ *   --orange-dim dark orange for low-streak heatmap cells
+ *   --orange-mid mid orange for medium-streak heatmap cells
+ *   --green      "logged" confirmation colour
+ *   --missed-bg  background tint for missed days
+ *   --radius     default border radius for cards / buttons
+ */
+:root {
+  --bg:         #0a0a0a;
+  --surface:    #111111;
+  --card:       #161616;
+  --border:     #222222;
+  --border2:    #2a2a2a;
+  --text:       #f5f5f5;
+  --muted:      #666666;
+  --muted2:     #444444;
+  --orange:     #f97316;   /* Tailwind orange-500 */
+  --orange-h:   #fb923c;   /* Tailwind orange-400 — hover */
+  --orange-dim: #7c2d00;   /* Tailwind orange-950 — low streak */
+  --orange-mid: #ea580c;   /* Tailwind orange-600 — mid streak */
+  --green:      #22c55e;   /* Tailwind green-500 */
+  --missed-bg:  #1a0a0a;   /* near-black with red warmth */
+  --radius:     10px;
+}
+
+/* ── 2. Base / layout ─────────────────────────────────────────────────────── */
+
+body {
+  width: 400px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+  overflow: hidden; /* prevents scrollbar flash during CSS transitions */
+}
+
+.app {
+  padding: 20px 18px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* ── 3. Header ────────────────────────────────────────────────────────────── */
+.header {
+  text-align: center;
+}
+
+.app-name {
+  font-size: 11px;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.streak-display {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.streak-fire {
+  font-size: 36px;
+  line-height: 1;
+  filter: drop-shadow(0 0 12px rgba(249, 115, 22, 0.6));
+}
+
+.streak-count {
+  font-size: 52px;
+  font-weight: 700;
+  letter-spacing: -2px;
+  color: var(--orange);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.streak-label {
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: 1px;
+  margin-top: 2px;
+}
+
+/* ── 4. Stats bar ─────────────────────────────────────────────────────────── */
+.stats-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 20px;
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.stat-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+}
+
+.stat-value {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.stat-divider {
+  width: 1px;
+  height: 28px;
+  background: var(--border);
+}
+
+/* ── 5. View toggle ───────────────────────────────────────────────────────── */
+.view-toggle {
+  display: flex;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 3px;
+  gap: 3px;
+}
+
+.toggle-btn {
+  flex: 1;
+  padding: 6px 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: inherit;
+}
+
+.toggle-btn.active {
+  background: var(--orange);
+  color: #fff;
+  font-weight: 600;
+}
+
+.toggle-btn:not(.active):hover {
+  color: var(--text);
+  background: var(--border);
+}
+
+/* ── 6. Calendar area wrapper ─────────────────────────────────────────────── */
+.calendar-area {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+}
+
+.hidden { display: none !important; }
+
+/* ── 7. Monthly view ──────────────────────────────────────────────────────── */
+.month-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.month-title, .year-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.nav-arrow {
+  background: none;
+  border: 1px solid var(--border2);
+  color: var(--muted);
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  font-family: inherit;
+}
+
+.nav-arrow:hover:not(:disabled) {
+  border-color: var(--orange);
+  color: var(--orange);
+}
+
+.nav-arrow:disabled {
+  opacity: 0.25;
+  cursor: default;
+}
+
+.day-headers {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  margin-bottom: 6px;
+}
+
+.day-headers span {
+  text-align: center;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+  padding: 2px 0;
+}
+
+.month-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 3px;
+}
+
+/*
+ * Day cell states — each cell gets exactly one state class:
+ *   .empty          blank padding before day 1 of the month
+ *   .future         days after today (no emoji, dimmed date)
+ *   .completed      logged (🔥, orange bg tint, hoverable tooltip)
+ *   .today-completed logged AND is today (stronger border)
+ *   .today-unmarked today, not yet logged (pulsing orange ring)
+ *   .missed         past day not logged (💀, dark red bg)
+ */
+.day-cell {
+  aspect-ratio: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  position: relative;
+  cursor: default;
+  transition: transform 0.15s ease;
+  gap: 1px;
+}
+
+.day-cell .day-num {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--muted2);
+  line-height: 1;
+}
+
+.day-cell .day-emoji {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.day-cell.empty {
+  background: transparent;
+}
+
+.day-cell.future {
+  background: transparent;
+}
+.day-cell.future .day-num {
+  color: #333;
+}
+
+.day-cell.missed {
+  background: var(--missed-bg);
+}
+.day-cell.missed .day-num {
+  color: #3d2020;
+}
+
+.day-cell.completed {
+  background: rgba(249, 115, 22, 0.08);
+  cursor: pointer;
+}
+.day-cell.completed:hover {
+  background: rgba(249, 115, 22, 0.15);
+  transform: scale(1.08);
+}
+
+.day-cell.today-unmarked {
+  background: rgba(249, 115, 22, 0.05);
+  border: 1px solid rgba(249, 115, 22, 0.35);
+  animation: pulse-ring 2s infinite;
+}
+.day-cell.today-unmarked .day-num {
+  color: var(--orange);
+}
+
+.day-cell.today-completed {
+  background: rgba(249, 115, 22, 0.12);
+  border: 1px solid rgba(249, 115, 22, 0.4);
+}
+
+@keyframes pulse-ring {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(249, 115, 22, 0.3); }
+  50%       { box-shadow: 0 0 0 4px rgba(249, 115, 22, 0.0); }
+}
+
+@keyframes mark-pop {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.2); filter: drop-shadow(0 0 8px rgba(249,115,22,0.8)); }
+  100% { transform: scale(1); }
+}
+
+.day-cell.pop .day-emoji {
+  animation: mark-pop 0.35s ease forwards;
+}
+
+/* ── 8. Yearly heatmap view ───────────────────────────────────────────────── */
+.year-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.year-grid-wrapper {
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.year-grid-wrapper::-webkit-scrollbar {
+  height: 3px;
+}
+.year-grid-wrapper::-webkit-scrollbar-track {
+  background: transparent;
+}
+.year-grid-wrapper::-webkit-scrollbar-thumb {
+  background: var(--border2);
+  border-radius: 3px;
+}
+
+.month-labels {
+  display: flex;
+  margin-bottom: 4px;
+  padding-left: 0;
+}
+
+.month-label-item {
+  font-size: 9px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+
+.year-grid {
+  display: flex;
+  gap: 2px;
+}
+
+.year-week {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.year-cell {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background: #1a1a1a;
+  flex-shrink: 0;
+  cursor: default;
+  transition: transform 0.1s ease;
+  position: relative;
+}
+
+.year-cell:hover {
+  transform: scale(1.4);
+  z-index: 10;
+}
+
+/*
+ * Heatmap intensity tiers — determined by the streak length on that day
+ * (see STREAK_TIER_LOW / STREAK_TIER_MID constants in popup.js):
+ *   completed-low  →  1–7 day streak
+ *   completed-mid  →  8–30 day streak
+ *   completed-high → 31+ day streak
+ */
+.year-cell.completed-low   { background: #7c2d00; } /* --orange-dim */
+.year-cell.completed-mid   { background: #ea580c; } /* --orange-mid */
+.year-cell.completed-high  { background: #f97316; } /* --orange     */
+.year-cell.missed          { background: #1f1212; } /* dark red tint */
+.year-cell.today-cell      { outline: 1px solid var(--orange); outline-offset: 1px; }
+
+/* ── 9. Mark Today button & note panel ───────────────────────────────────── */
+.mark-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mark-btn {
+  width: 100%;
+  padding: 11px;
+  background: var(--orange);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s ease;
+  letter-spacing: 0.3px;
+}
+
+.mark-btn:hover:not(:disabled) {
+  background: var(--orange-h);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(249, 115, 22, 0.35);
+}
+
+.mark-btn:disabled {
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--green);
+  cursor: default;
+  transform: none;
+  box-shadow: none;
+}
+
+.mark-btn.logged {
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  color: var(--green);
+}
+
+/* Note panel — slides open below the button using max-height transition.
+ * The .hidden class (display:none) is toggled after the transition ends
+ * so the element is truly removed from the layout when closed. */
+.note-input-area {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow: hidden;
+  max-height: 0;
+  opacity: 0;
+  transition: max-height 0.2s ease, opacity 0.2s ease;
+}
+
+.note-input-area.visible {
+  max-height: 120px;
+  opacity: 1;
+}
+
+.note-input {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 8px 10px;
+  resize: none;
+  outline: none;
+  transition: border-color 0.15s ease;
+  line-height: 1.5;
+}
+
+.note-input:focus {
+  border-color: var(--orange);
+}
+
+.note-input::placeholder {
+  color: var(--muted);
+}
+
+.note-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.note-cancel {
+  padding: 5px 12px;
+  background: transparent;
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s ease;
+}
+
+.note-cancel:hover {
+  border-color: var(--muted);
+  color: var(--text);
+}
+
+.note-confirm {
+  padding: 5px 14px;
+  background: var(--orange);
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s ease;
+}
+
+.note-confirm:hover {
+  background: var(--orange-h);
+}
+
+/* ── 10. Tooltip ──────────────────────────────────────────────────────────── */
+.tooltip {
+  position: fixed;
+  background: #1c1c1e;
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 11px;
+  color: var(--text);
+  max-width: 200px;
+  word-wrap: break-word;
+  pointer-events: none;
+  z-index: 1000;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  line-height: 1.5;
+}
+
+.tooltip.visible {
+  opacity: 1;
+}
+
+.tooltip .tt-date {
+  font-size: 10px;
+  color: var(--muted);
+  margin-bottom: 3px;
+  font-weight: 500;
+}
+
+.tooltip .tt-note {
+  color: var(--text);
+}
+
+/* ── 11. Animations & transitions ─────────────────────────────────────────── */
+
+/* Brief opacity fade when switching between Monthly and Yearly views */
+.calendar-area.fade-in {
+  animation: fadeIn 0.15s ease forwards;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0.4; }
+  to   { opacity: 1; }
+}
