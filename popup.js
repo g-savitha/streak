@@ -77,8 +77,6 @@ const QUOTES = [
   "Work like hell. I mean you just have to put in 80–100 hour weeks every week. — Elon Musk",
 
   // Gary Vaynerchuk
-  "Skills are cheap. Passion is priceless. — Gary Vee",
-  "Stop doing the things you hate, start doing the things you love — and don't stop. — Gary Vee",
   "Every day is a new opportunity to grow. Use it. — Gary Vee",
 
   // Naval Ravikant
@@ -87,15 +85,8 @@ const QUOTES = [
   "Specific knowledge is knowledge you cannot be trained for. — Naval Ravikant",
   "A calm mind, a fit body, a house full of books. Pick three. — Naval Ravikant",
 
-  // Marcus Aurelius
-  "You have power over your mind, not outside events. Realise this and you will find strength. — Marcus Aurelius",
-  "Waste no more time arguing what a good man should be. Be one. — Marcus Aurelius",
-  "The impediment to action advances action. What stands in the way becomes the way. — Marcus Aurelius",
-  "Confine yourself to the present. — Marcus Aurelius",
-
   // Warren Buffett
   "The more you learn, the more you earn. — Warren Buffett",
-  "Read 500 pages every day. That's how knowledge works. It builds up, like compound interest. — Warren Buffett",
   "Someone is sitting in the shade today because someone planted a tree a long time ago. — Warren Buffett",
 
   // James Clear
