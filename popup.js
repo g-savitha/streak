@@ -48,36 +48,61 @@ const CHALLENGE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
  * so it changes exactly at midnight without requiring storage.
  */
 const QUOTES = [
-  "Every page you read today is a step toward who you're becoming.",
-  "Small daily habits build extraordinary lives.",
-  "The person who reads every day is unstoppable.",
-  "Consistency is the bridge between goals and accomplishment.",
-  "You don't rise to the level of your goals — you fall to the level of your systems.",
-  "Reading is the gym for your mind. Show up today.",
-  "One chapter a day keeps the stagnation away.",
-  "The secret of getting ahead is getting started.",
-  "Knowledge compounds. Every day you read, you invest in yourself.",
-  "Your future self is reading right now. Don't let them down.",
-  "Great readers are not born — they're built one day at a time.",
-  "A book a day keeps ignorance away. Start now.",
-  "Progress, not perfection. Read something today.",
-  "The more you read, the more you know. The more you know, the further you go.",
-  "Reading is a superpower. Use it every day.",
-  "Today's reading is tomorrow's wisdom.",
-  "Feed your mind. Read today.",
-  "Discipline is choosing what you want most over what you want now.",
-  "Every expert was once a beginner who didn't quit.",
-  "Your streak is proof that you show up. Keep going.",
-  "Success is the sum of small efforts repeated every single day.",
-  "Be the kind of person who reads every day. You already are.",
-  "The habit you build today shapes the person you become tomorrow.",
-  "Learning never exhausts the mind — Leonardo da Vinci",
-  "An investment in knowledge pays the best interest — Benjamin Franklin",
-  "Not all readers are leaders, but all leaders are readers — Harry Truman",
-  "Read more. Know more. Be more.",
-  "The difference between who you are and who you want to be is what you do today.",
-  "Momentum is everything. Keep your streak alive.",
-  "You opened this app. Now go open a book. 📚",
+  // APJ Abdul Kalam
+  "You have to dream before your dreams can come true. — APJ Abdul Kalam",
+  "Excellence is a continuous process and not an accident. — APJ Abdul Kalam",
+  "If you want to shine like a sun, first burn like a sun. — APJ Abdul Kalam",
+  "Learning gives creativity, creativity leads to thinking, thinking provides knowledge, knowledge makes you great. — APJ Abdul Kalam",
+
+  // Swami Vivekananda
+  "Arise, awake and do not stop until the goal is reached. — Swami Vivekananda",
+  "Take up one idea. Make it your life — think of it, dream of it, live on it. — Swami Vivekananda",
+  "All the strength and succour you want is within yourself. — Swami Vivekananda",
+  "The greatest sin is to think yourself weak. — Swami Vivekananda",
+
+  // Steve Jobs
+  "Stay hungry, stay foolish. — Steve Jobs",
+  "The people who are crazy enough to think they can change the world are the ones who do. — Steve Jobs",
+  "Your time is limited, so don't waste it living someone else's life. — Steve Jobs",
+  "The only way to do great work is to love what you do. — Steve Jobs",
+
+  // Jack Ma
+  "Today is hard, tomorrow will be worse, but the day after tomorrow will be sunshine. — Jack Ma",
+  "If you don't give up, you still have a chance. — Jack Ma",
+  "No matter how tough the chase is, you should always have the dream you saw on the first day. — Jack Ma",
+
+  // Elon Musk
+  "When something is important enough, you do it even if the odds are not in your favour. — Elon Musk",
+  "Persistence is very important. You should not give up unless you are forced to give up. — Elon Musk",
+  "Work like hell. I mean you just have to put in 80–100 hour weeks every week. — Elon Musk",
+
+  // Gary Vaynerchuk
+  "Skills are cheap. Passion is priceless. — Gary Vee",
+  "Stop doing the things you hate, start doing the things you love — and don't stop. — Gary Vee",
+  "Every day is a new opportunity to grow. Use it. — Gary Vee",
+
+  // Naval Ravikant
+  "Read what you love until you love to read. — Naval Ravikant",
+  "The best investment you can make is in yourself. — Naval Ravikant",
+  "Specific knowledge is knowledge you cannot be trained for. — Naval Ravikant",
+  "A calm mind, a fit body, a house full of books. Pick three. — Naval Ravikant",
+
+  // Marcus Aurelius
+  "You have power over your mind, not outside events. Realise this and you will find strength. — Marcus Aurelius",
+  "Waste no more time arguing what a good man should be. Be one. — Marcus Aurelius",
+  "The impediment to action advances action. What stands in the way becomes the way. — Marcus Aurelius",
+  "Confine yourself to the present. — Marcus Aurelius",
+
+  // Warren Buffett
+  "The more you learn, the more you earn. — Warren Buffett",
+  "Read 500 pages every day. That's how knowledge works. It builds up, like compound interest. — Warren Buffett",
+  "Someone is sitting in the shade today because someone planted a tree a long time ago. — Warren Buffett",
+
+  // James Clear
+  "You do not rise to the level of your goals. You fall to the level of your systems. — James Clear",
+  "Every action you take is a vote for the type of person you wish to become. — James Clear",
+  "The most practical way to change who you are is to change what you do. — James Clear",
+  "Success is the product of daily habits — not once-in-a-lifetime transformations. — James Clear",
 ];
 
 /**
