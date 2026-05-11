@@ -1,18 +1,18 @@
 /**
- * popup.js — Streak Extension UI
+ * popup.js — Streak Extension v2 UI
  *
- * Owns all popup rendering and user interactions:
- *   • Monthly calendar view  — full month grid, Mon-Sun columns
- *   • Yearly calendar view   — GitHub-style contribution heatmap
- *   • Mark Today flow        — inline note textarea → save → fire animation
- *   • Tooltip                — hover over any logged day to see the note
- *   • Stats header           — current streak, longest streak, total days
+ * New in v2:
+ *   • Daily motivational quote (stable per day, no storage needed)
+ *   • Confetti + celebration banner on marking today
+ *   • Light/dark theme toggle (persisted to storage)
+ *   • Shareable PNG export of yearly heatmap + stats card
+ *   • Code-based friend challenge (Base64 encoded, no backend)
+ *   • Missed day emoji changed from 💀 to 😢
+ *   • Gradient UI
  *
- * Data flow:
- *   chrome.storage.local → appDays (in-memory cache) → render functions → DOM
+ * Data flow (unchanged from v1):
+ *   chrome.storage.local → appDays (in-memory) → render → DOM
  *   User action → update appDays → chrome.storage.local.set → re-render
- *
- * All dates are in local time. Keys are "YYYY-MM-DD" strings.
  */
 
 'use strict';
@@ -20,82 +20,149 @@
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const EMOJI_COMPLETE = '🔥';
-const EMOJI_MISSED   = '💀';
+const EMOJI_MISSED   = '😢';  // v2: changed from 💀 to be encouraging not punishing
 
-// Streak thresholds that determine colour intensity in the yearly heatmap
-const STREAK_TIER_LOW  = 7;   // 1–7  days → dim orange
-const STREAK_TIER_MID  = 30;  // 8–30 days → mid orange
-// > 30 days → bright orange (completed-high CSS class)
+// Streak length thresholds for heatmap colour tiers (yearly view)
+const STREAK_TIER_LOW = 7;   // 1–7  → dim orange
+const STREAK_TIER_MID = 30;  // 8–30 → mid orange  /  31+ → bright orange
 
-const TOOLTIP_DELAY_MS  = 200; // ms to wait before showing tooltip on hover
-const NOTE_ANIMATE_MS   = 400; // ms for the mark-pop animation to finish
+const TOOLTIP_DELAY_MS  = 200;
+const NOTE_ANIMATE_MS   = 400;
+const CELEBRATION_MS    = 3000; // how long the celebration banner stays visible
 
-// Cell width (px) used to compute month label widths in the yearly view.
-// Must match .year-cell { width } + .year-grid { gap } in popup.css.
+// Yearly heatmap: cell width (9px) + gap (2px) = 11px per week column.
+// Must stay in sync with .year-cell and .year-grid { gap } in popup.css.
 const YEAR_CELL_WIDTH_PX = 11;
 
-const MONTH_NAMES_SHORT = ['Jan','Feb','Mar','Apr','May','Jun',
-                           'Jul','Aug','Sep','Oct','Nov','Dec'];
+const MONTH_NAMES_SHORT  = ['Jan','Feb','Mar','Apr','May','Jun',
+                            'Jul','Aug','Sep','Oct','Nov','Dec'];
+
+// Challenge codes older than this are considered expired
+const CHALLENGE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+// ─── Daily motivational quotes ────────────────────────────────────────────────
+
+/**
+ * Shown in the quote bar at the top of the popup.
+ * Selection is stable per calendar day: index = floor(now / MS_PER_DAY) % length
+ * so it changes exactly at midnight without requiring storage.
+ */
+const QUOTES = [
+  "Every page you read today is a step toward who you're becoming.",
+  "Small daily habits build extraordinary lives.",
+  "The person who reads every day is unstoppable.",
+  "Consistency is the bridge between goals and accomplishment.",
+  "You don't rise to the level of your goals — you fall to the level of your systems.",
+  "Reading is the gym for your mind. Show up today.",
+  "One chapter a day keeps the stagnation away.",
+  "The secret of getting ahead is getting started.",
+  "Knowledge compounds. Every day you read, you invest in yourself.",
+  "Your future self is reading right now. Don't let them down.",
+  "Great readers are not born — they're built one day at a time.",
+  "A book a day keeps ignorance away. Start now.",
+  "Progress, not perfection. Read something today.",
+  "The more you read, the more you know. The more you know, the further you go.",
+  "Reading is a superpower. Use it every day.",
+  "Today's reading is tomorrow's wisdom.",
+  "Feed your mind. Read today.",
+  "Discipline is choosing what you want most over what you want now.",
+  "Every expert was once a beginner who didn't quit.",
+  "Your streak is proof that you show up. Keep going.",
+  "Success is the sum of small efforts repeated every single day.",
+  "Be the kind of person who reads every day. You already are.",
+  "The habit you build today shapes the person you become tomorrow.",
+  "Learning never exhausts the mind — Leonardo da Vinci",
+  "An investment in knowledge pays the best interest — Benjamin Franklin",
+  "Not all readers are leaders, but all leaders are readers — Harry Truman",
+  "Read more. Know more. Be more.",
+  "The difference between who you are and who you want to be is what you do today.",
+  "Momentum is everything. Keep your streak alive.",
+  "You opened this app. Now go open a book. 📚",
+];
+
+/**
+ * Shown in the celebration banner after marking today complete.
+ * Picked randomly each time for variety.
+ */
+const CELEBRATION_QUOTES = [
+  "🎉 You showed up today. That's everything.",
+  "🔥 Another day, another victory. You're on fire!",
+  "✨ Streak alive! Your future self is proud of you.",
+  "🌟 That's what consistency looks like. Keep it up!",
+  "💪 Done! You're building something extraordinary.",
+  "🚀 One more day added to your legend. Let's go!",
+  "📚 You read today. That's not small — that's huge.",
+  "🎯 Nailed it! Your streak grows stronger.",
+  "⚡ You did the thing. Champions log every day.",
+  "🏆 Today? Crushed. Tomorrow? Same energy!",
+];
 
 // ─── Application state ────────────────────────────────────────────────────────
 
-/**
- * In-memory mirror of chrome.storage.local { days }.
- * Kept in sync immediately on every save so renders don't need async reads.
- * Shape: { "YYYY-MM-DD": { completed: boolean, note: string } }
- */
+/** In-memory mirror of chrome.storage.local { days }. Always written through to storage. */
 let appDays = {};
 
-/** Which month/year the monthly calendar is showing. */
-let viewMonth = new Date().getMonth();
-let viewYear  = new Date().getFullYear();
+/** App settings — theme and display name for challenges. */
+let appSettings = { theme: 'dark', name: '' };
 
-/**
- * Offset from the current year for the yearly heatmap view.
- * 0 = current year, -1 = last year, etc.
- * Capped at 0 (can't navigate to the future).
- */
-let viewYearOffset = 0;
-
-/** 'monthly' | 'yearly' */
-let currentView = 'monthly';
-
-/** setTimeout handle for the tooltip delay. */
+let viewMonth      = new Date().getMonth();
+let viewYear       = new Date().getFullYear();
+let viewYearOffset = 0;   // 0 = current year, -1 = last year, etc.
+let currentView    = 'monthly';
 let tooltipTimeout = null;
 
 // ─── DOM references ───────────────────────────────────────────────────────────
-// Collected once at startup. Prefer getElementById over querySelector for speed.
 
-const $currentStreak = document.getElementById('currentStreak');
-const $longestStreak = document.getElementById('longestStreak');
-const $totalDays     = document.getElementById('totalDays');
-const $monthTitle    = document.getElementById('monthTitle');
-const $monthGrid     = document.getElementById('monthGrid');
-const $yearTitle     = document.getElementById('yearTitle');
-const $yearGrid      = document.getElementById('yearGrid');
-const $monthLabels   = document.getElementById('monthLabels');
-const $monthlyView   = document.getElementById('monthlyView');
-const $yearlyView    = document.getElementById('yearlyView');
-const $calendarArea  = document.getElementById('calendarArea');
-const $markBtn       = document.getElementById('markBtn');
-const $noteInputArea = document.getElementById('noteInputArea');
-const $noteInput     = document.getElementById('noteInput');
-const $noteCancel    = document.getElementById('noteCancel');
-const $noteConfirm   = document.getElementById('noteConfirm');
-const $btnMonthly    = document.getElementById('btnMonthly');
-const $btnYearly     = document.getElementById('btnYearly');
-const $prevMonth     = document.getElementById('prevMonth');
-const $nextMonth     = document.getElementById('nextMonth');
-const $prevYear      = document.getElementById('prevYear');
-const $nextYear      = document.getElementById('nextYear');
-const $tooltip       = document.getElementById('tooltip');
+const $currentStreak    = document.getElementById('currentStreak');
+const $longestStreak    = document.getElementById('longestStreak');
+const $totalDays        = document.getElementById('totalDays');
+const $monthTitle       = document.getElementById('monthTitle');
+const $monthGrid        = document.getElementById('monthGrid');
+const $yearTitle        = document.getElementById('yearTitle');
+const $yearGrid         = document.getElementById('yearGrid');
+const $monthLabels      = document.getElementById('monthLabels');
+const $monthlyView      = document.getElementById('monthlyView');
+const $yearlyView       = document.getElementById('yearlyView');
+const $calendarArea     = document.getElementById('calendarArea');
+const $markBtn          = document.getElementById('markBtn');
+const $noteInputArea    = document.getElementById('noteInputArea');
+const $noteInput        = document.getElementById('noteInput');
+const $noteCancel       = document.getElementById('noteCancel');
+const $noteConfirm      = document.getElementById('noteConfirm');
+const $btnMonthly       = document.getElementById('btnMonthly');
+const $btnYearly        = document.getElementById('btnYearly');
+const $prevMonth        = document.getElementById('prevMonth');
+const $nextMonth        = document.getElementById('nextMonth');
+const $prevYear         = document.getElementById('prevYear');
+const $nextYear         = document.getElementById('nextYear');
+const $tooltip          = document.getElementById('tooltip');
+const $quoteText        = document.getElementById('quoteText');
+const $themeToggle      = document.getElementById('themeToggle');
+const $themeIcon        = document.getElementById('themeIcon');
+const $celebrationBanner = document.getElementById('celebrationBanner');
+const $confettiCanvas   = document.getElementById('confettiCanvas');
+const $shareDownloadBtn = document.getElementById('shareDownloadBtn');
+const $shareCopyBtn     = document.getElementById('shareCopyBtn');
+const $challengeToggle  = document.getElementById('challengeToggle');
+const $challengeSection = document.getElementById('challengeSection');
+const $challengeBody    = document.getElementById('challengeBody');
+const $tabYourCode      = document.getElementById('tabYourCode');
+const $tabEnterCode     = document.getElementById('tabEnterCode');
+const $panelYourCode    = document.getElementById('panelYourCode');
+const $panelEnterCode   = document.getElementById('panelEnterCode');
+const $userName         = document.getElementById('userName');
+const $generatedCode    = document.getElementById('generatedCode');
+const $copyCodeBtn      = document.getElementById('copyCodeBtn');
+const $friendCodeInput  = document.getElementById('friendCodeInput');
+const $compareBtn       = document.getElementById('compareBtn');
+const $challengeResult  = document.getElementById('challengeResult');
 
 // ─── Date utilities ───────────────────────────────────────────────────────────
 
 /**
- * Returns a "YYYY-MM-DD" key for the given Date in LOCAL time.
- * Never use date.toISOString() for keys — it returns UTC, which can be a
- * different calendar day near midnight depending on the user's timezone.
+ * Returns "YYYY-MM-DD" in LOCAL time.
+ * Never use toISOString() — it returns UTC and can be a different calendar
+ * date near midnight depending on the user's timezone.
  */
 function getDateKey(date) {
   const y = date.getFullYear();
@@ -104,150 +171,132 @@ function getDateKey(date) {
   return `${y}-${m}-${d}`;
 }
 
-/** Today's "YYYY-MM-DD" key. */
-function getTodayKey() {
-  return getDateKey(new Date());
-}
+function getTodayKey() { return getDateKey(new Date()); }
 
 /**
- * Parses a "YYYY-MM-DD" key back into a local-time Date at midnight.
- * Using `new Date(y, m-1, d)` avoids UTC offset issues that occur with
- * `new Date("YYYY-MM-DD")` (which is parsed as UTC).
+ * Parses "YYYY-MM-DD" into a local-time Date at midnight.
+ * `new Date("YYYY-MM-DD")` would parse as UTC — this avoids that.
  */
 function parseKey(key) {
   const [y, m, d] = key.split('-').map(Number);
   return new Date(y, m - 1, d);
 }
 
-/** Formats year + month index as "Month YYYY" (e.g. "May 2026"). */
 function formatMonthYear(year, month) {
   return new Date(year, month).toLocaleDateString('en-US', {
-    month: 'long',
-    year:  'numeric',
+    month: 'long', year: 'numeric',
   });
 }
 
 // ─── Streak calculations ──────────────────────────────────────────────────────
 
 /**
- * Current streak: number of consecutive completed days ending at today
- * (or yesterday, if today hasn't been logged yet).
- *
- * This allows the streak counter to stay non-zero all day as long as she
- * logged yesterday — it only drops to 0 at midnight if today is also missed.
+ * Current streak: consecutive completed days ending at today (or yesterday
+ * if today isn't logged yet). Drops to 0 only after midnight if today is missed.
  */
 function calcCurrentStreak(days) {
   const todayKey = getTodayKey();
   const cursor   = new Date();
-
-  // If today isn't logged, start counting from yesterday
-  if (!days[todayKey]?.completed) {
-    cursor.setDate(cursor.getDate() - 1);
-  }
+  if (!days[todayKey]?.completed) cursor.setDate(cursor.getDate() - 1);
 
   let streak = 0;
   while (true) {
     const key = getDateKey(cursor);
-    if (days[key]?.completed) {
-      streak++;
-      cursor.setDate(cursor.getDate() - 1);
-    } else {
-      break; // gap found — streak ends here
-    }
+    if (days[key]?.completed) { streak++; cursor.setDate(cursor.getDate() - 1); }
+    else break;
   }
   return streak;
 }
 
-/**
- * Longest streak ever achieved, scanning the full history.
- * Counts only completed days; a single missed day breaks the chain.
- *
- * Adds 'T00:00:00' when parsing keys to force local-time midnight,
- * otherwise JS may interpret the date string as UTC.
- */
+/** Longest consecutive completed-day run across all history. */
 function calcLongestStreak(days) {
-  const completedKeys = Object.keys(days)
-    .filter(key => days[key].completed)
-    .sort(); // ISO keys sort lexicographically = chronologically
-
-  let longest  = 0;
-  let current  = 0;
-  let prevDate = null;
-
-  for (const key of completedKeys) {
-    const date     = new Date(key + 'T00:00:00');
-    const daysDiff = prevDate
-      ? Math.round((date - prevDate) / 86_400_000)
-      : null;
-
-    if (daysDiff === 1) {
-      current++; // consecutive day
-    } else {
-      current = 1; // first day, or gap resets chain
-    }
-
+  const keys = Object.keys(days).filter(k => days[k].completed).sort();
+  let longest = 0, current = 0, prevDate = null;
+  for (const key of keys) {
+    const date = new Date(key + 'T00:00:00');
+    const diff = prevDate ? Math.round((date - prevDate) / 86_400_000) : null;
+    current    = diff === 1 ? current + 1 : 1;
     if (current > longest) longest = current;
     prevDate = date;
   }
-
   return longest;
 }
 
-/** Total number of days ever logged as completed. */
+/** Total completed days ever. */
 function calcTotal(days) {
-  return Object.values(days).filter(entry => entry.completed).length;
+  return Object.values(days).filter(e => e.completed).length;
 }
 
 /**
- * Streak length at a specific day (looking backwards from that day).
- * Used to colour heatmap cells: a cell on a 25-day streak gets mid-orange.
- *
- * This is O(streak_length) per cell, acceptable for a year's worth of data
- * (~365 cells × average streak ≪ 10k operations total).
+ * Streak length ending at a specific day (looking backwards).
+ * Used to pick the correct colour tier for heatmap cells.
  */
 function getStreakAt(key) {
   const cursor = parseKey(key);
-  let streak   = 0;
+  let streak = 0;
   while (true) {
     const k = getDateKey(cursor);
-    if (appDays[k]?.completed) {
-      streak++;
-      cursor.setDate(cursor.getDate() - 1);
-    } else {
-      break;
-    }
+    if (appDays[k]?.completed) { streak++; cursor.setDate(cursor.getDate() - 1); }
+    else break;
   }
   return streak;
 }
 
-// ─── Stats header ─────────────────────────────────────────────────────────────
+// ─── Theme ────────────────────────────────────────────────────────────────────
 
-/** Re-reads appDays and updates the three stat labels in the header. */
+/**
+ * Applies the given theme to <html data-theme="..."> and updates the icon.
+ * Does NOT persist — call saveSettings() separately if needed.
+ */
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  $themeIcon.textContent = theme === 'dark' ? '🌙' : '☀️';
+  appSettings.theme = theme;
+}
+
+function toggleTheme() {
+  const next = appSettings.theme === 'dark' ? 'light' : 'dark';
+  applyTheme(next);
+  saveSettings();
+}
+
+// ─── Settings persistence ─────────────────────────────────────────────────────
+
+function saveSettings() {
+  chrome.storage.local.set({ settings: appSettings });
+}
+
+// ─── Stats update ─────────────────────────────────────────────────────────────
+
 function updateStats() {
   const current = calcCurrentStreak(appDays);
   const longest = calcLongestStreak(appDays);
   const total   = calcTotal(appDays);
-
   $currentStreak.textContent = current;
   $longestStreak.textContent = longest + (longest === 1 ? ' day' : ' days');
   $totalDays.textContent     = total   + (total   === 1 ? ' day' : ' days');
 }
 
-// ─── Mark Today button state ──────────────────────────────────────────────────
+// ─── Daily quote ──────────────────────────────────────────────────────────────
 
 /**
- * Syncs the Mark Today button to match storage state.
- * Called on init and after every save so the button is always accurate.
+ * Picks today's quote using a stable day-based index — same quote all day,
+ * changes at midnight, no storage required.
  */
-function updateMarkButton() {
-  const todayKey   = getTodayKey();
-  const todayEntry = appDays[todayKey];
+function renderQuote() {
+  const index = Math.floor(Date.now() / 86_400_000) % QUOTES.length;
+  $quoteText.textContent = QUOTES[index];
+}
 
-  if (todayEntry?.completed) {
+// ─── Mark Today button state ──────────────────────────────────────────────────
+
+function updateMarkButton() {
+  const entry = appDays[getTodayKey()];
+  if (entry?.completed) {
     $markBtn.textContent = '✓ Logged today';
     $markBtn.disabled    = true;
     $markBtn.classList.add('logged');
-    closeNotePanel(/* immediate */ true);
+    closeNotePanel(true);
   } else {
     $markBtn.textContent = 'Mark Today';
     $markBtn.disabled    = false;
@@ -255,78 +304,49 @@ function updateMarkButton() {
   }
 }
 
-// ─── Note panel (slide-in textarea) ──────────────────────────────────────────
+// ─── Note panel ───────────────────────────────────────────────────────────────
 
-/**
- * Slides the note textarea into view and focuses it.
- * Uses requestAnimationFrame to let the browser paint the un-hidden state
- * before the CSS transition starts; without it the transition is skipped.
- */
 function openNotePanel() {
   $noteInputArea.classList.remove('hidden');
   requestAnimationFrame(() => $noteInputArea.classList.add('visible'));
   $noteInput.focus();
 }
 
-/**
- * Slides the note panel out of view.
- * @param {boolean} immediate - if true, hides without waiting for transition
- */
 function closeNotePanel(immediate = false) {
   $noteInputArea.classList.remove('visible');
-  if (immediate) {
-    $noteInputArea.classList.add('hidden');
-  } else {
-    setTimeout(() => $noteInputArea.classList.add('hidden'), 200);
-  }
+  if (immediate) $noteInputArea.classList.add('hidden');
+  else setTimeout(() => $noteInputArea.classList.add('hidden'), 220);
   $noteInput.value = '';
 }
 
 // ─── Save today ───────────────────────────────────────────────────────────────
 
-/**
- * Writes today's entry to storage and refreshes the UI.
- * Triggered by the "Save ✓" button or Cmd/Ctrl+Enter in the textarea.
- */
 function saveToday() {
   const todayKey = getTodayKey();
   const note     = $noteInput.value.trim();
-
-  // Update in-memory state first so all subsequent renders see it immediately
   appDays[todayKey] = { completed: true, note };
 
   const longest = calcLongestStreak(appDays);
-
   chrome.storage.local.set({ days: appDays, longestStreak: longest }, () => {
     closeNotePanel();
     updateMarkButton();
     updateStats();
     refreshCalendar();
     animateTodayCell();
+    showCelebration();   // 🎉 confetti + banner
+    refreshChallengeCode(); // update code if challenge panel is open
   });
 }
 
-/** Re-renders whichever calendar view is currently active. */
 function refreshCalendar() {
-  if (currentView === 'monthly') {
-    renderMonthly();
-  } else {
-    renderYearly();
-  }
+  if (currentView === 'monthly') renderMonthly();
+  else renderYearly();
 }
 
-/**
- * Triggers the "pop" animation on today's cell in the monthly grid.
- * Runs after renderMonthly() has rebuilt the DOM, so today's cell exists.
- */
 function animateTodayCell() {
   if (currentView !== 'monthly') return;
-
   const todayDate = new Date().getDate();
-
-  // Find the cell whose day number matches today's date
-  const cells = $monthGrid.querySelectorAll('.day-cell.completed');
-  cells.forEach(cell => {
+  $monthGrid.querySelectorAll('.day-cell.completed').forEach(cell => {
     const numEl = cell.querySelector('.day-num');
     if (numEl && parseInt(numEl.textContent, 10) === todayDate) {
       cell.classList.add('pop');
@@ -335,42 +355,119 @@ function animateTodayCell() {
   });
 }
 
-// ─── Monthly calendar ─────────────────────────────────────────────────────────
+// ─── Celebration banner + confetti ────────────────────────────────────────────
 
 /**
- * Renders the monthly calendar grid for viewYear/viewMonth.
- *
- * Grid layout: 7 columns (Mon–Sun). Each cell is a square div containing
- * a date number and, for non-future days, an emoji.
- *
- * Cell states:
- *   .empty          — padding cells before day 1 (no content)
- *   .future         — days after today (dimmed, no emoji)
- *   .completed      — logged day (🔥, hoverable tooltip, orange bg tint)
- *   .today-completed — today AND logged (stronger orange border)
- *   .today-unmarked — today, not yet logged (pulsing ring)
- *   .missed         — past day with no entry (💀, dark red bg)
+ * Shows the celebration banner with a random quote, then auto-dismisses.
+ * Simultaneously launches confetti and scrolls to the top so the quote is visible.
  */
+function showCelebration() {
+  const quote = CELEBRATION_QUOTES[Math.floor(Math.random() * CELEBRATION_QUOTES.length)];
+  $celebrationBanner.textContent   = quote;
+  $celebrationBanner.ariaHidden    = 'false';
+  $celebrationBanner.classList.add('visible');
+
+  // Scroll the popup body to top so the celebration banner and quote are in view
+  document.documentElement.scrollTop = 0;
+  document.body.scrollTop = 0;
+
+  launchConfetti();
+
+  setTimeout(() => {
+    $celebrationBanner.classList.remove('visible');
+    setTimeout(() => { $celebrationBanner.ariaHidden = 'true'; }, 300);
+  }, CELEBRATION_MS);
+}
+
+/**
+ * Pure JS canvas confetti — no external libraries.
+ *
+ * Spawns PARTICLE_COUNT particles from the top of the popup, each with random
+ * position, velocity, rotation, size, and colour. An rAF loop runs for
+ * DURATION_MS then clears the canvas.
+ *
+ * Gravity (vy accumulates), slight horizontal drift, and opacity fade near the
+ * bottom create a natural falling effect.
+ */
+function launchConfetti() {
+  const canvas = $confettiCanvas;
+  const ctx    = canvas.getContext('2d');
+  canvas.width  = window.innerWidth;
+  canvas.height = window.innerHeight;
+
+  const COLOURS        = ['#f97316','#ec4899','#22c55e','#3b82f6','#a855f7','#facc15'];
+  const PARTICLE_COUNT = 80;
+  const DURATION_MS    = 2600;
+  const GRAVITY        = 0.28;
+
+  const particles = Array.from({ length: PARTICLE_COUNT }, () => ({
+    x:             Math.random() * canvas.width,
+    y:             Math.random() * canvas.height * -0.3,  // start above viewport
+    vx:            (Math.random() - 0.5) * 3,
+    vy:            Math.random() * 2 + 1,
+    rotation:      Math.random() * Math.PI * 2,
+    rotationSpeed: (Math.random() - 0.5) * 0.15,
+    width:         Math.random() * 7 + 4,
+    height:        Math.random() * 4 + 3,
+    colour:        COLOURS[Math.floor(Math.random() * COLOURS.length)],
+    opacity:       1,
+  }));
+
+  const startTime = Date.now();
+
+  function frame() {
+    const elapsed  = Date.now() - startTime;
+    const progress = elapsed / DURATION_MS; // 0 → 1
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    particles.forEach(p => {
+      p.vy        += GRAVITY;
+      p.x         += p.vx;
+      p.y         += p.vy;
+      p.rotation  += p.rotationSpeed;
+      // Fade out in the last 40% of the animation
+      p.opacity    = progress < 0.6 ? 1 : 1 - ((progress - 0.6) / 0.4);
+
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, p.opacity);
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rotation);
+      ctx.fillStyle = p.colour;
+      ctx.fillRect(-p.width / 2, -p.height / 2, p.width, p.height);
+      ctx.restore();
+    });
+
+    if (elapsed < DURATION_MS) {
+      requestAnimationFrame(frame);
+    } else {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+  }
+
+  requestAnimationFrame(frame);
+}
+
+// ─── Monthly calendar ─────────────────────────────────────────────────────────
+
 function renderMonthly() {
   $monthTitle.textContent = formatMonthYear(viewYear, viewMonth);
 
   const today    = new Date();
   const todayKey = getTodayKey();
 
-  // Prevent navigating forward past the current month
   $nextMonth.disabled =
     viewYear > today.getFullYear() ||
     (viewYear === today.getFullYear() && viewMonth >= today.getMonth());
 
   $monthGrid.innerHTML = '';
 
-  // Determine how many blank cells to prefix before day 1.
-  // JS getDay(): 0=Sun, 1=Mon … 6=Sat. We want Mon=0, so shift by -1.
-  const firstDayOfWeek = new Date(viewYear, viewMonth, 1).getDay();
-  const startOffset    = (firstDayOfWeek === 0) ? 6 : firstDayOfWeek - 1;
-  const daysInMonth    = new Date(viewYear, viewMonth + 1, 0).getDate();
+  // JS getDay(): 0=Sun…6=Sat. Shift so Mon=0 (Sun → 6).
+  const firstDow    = new Date(viewYear, viewMonth, 1).getDay();
+  const startOffset = firstDow === 0 ? 6 : firstDow - 1;
+  const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
 
-  // Blank filler cells
+  // Blank padding cells before day 1
   for (let i = 0; i < startOffset; i++) {
     const cell = document.createElement('div');
     cell.className = 'day-cell empty';
@@ -378,32 +475,29 @@ function renderMonthly() {
     $monthGrid.appendChild(cell);
   }
 
-  // Day cells
   for (let day = 1; day <= daysInMonth; day++) {
-    const date    = new Date(viewYear, viewMonth, day);
-    const key     = getDateKey(date);
-    const entry   = appDays[key];
-    const isToday  = (key === todayKey);
-    const isPast   = (date < today) && !isToday;
-    const isFuture = (date > today);
+    const date     = new Date(viewYear, viewMonth, day);
+    const key      = getDateKey(date);
+    const entry    = appDays[key];
+    const isToday  = key === todayKey;
+    const isPast   = date < today && !isToday;
+    const isFuture = date > today;
 
-    const cell   = document.createElement('div');
-    const numEl  = document.createElement('div');
+    const cell    = document.createElement('div');
+    const numEl   = document.createElement('div');
     const emojiEl = document.createElement('div');
 
     cell.classList.add('day-cell');
     cell.setAttribute('aria-label', date.toLocaleDateString('en-US', { month: 'long', day: 'numeric' }));
-    numEl.className    = 'day-num';
-    numEl.textContent  = day;
-    emojiEl.className  = 'day-emoji';
+    numEl.className   = 'day-num';
+    numEl.textContent = day;
+    emojiEl.className = 'day-emoji';
 
     if (isFuture) {
-      // Future — show date only, no emoji
       cell.classList.add('future');
       cell.appendChild(numEl);
 
     } else if (entry?.completed) {
-      // Logged day 🔥
       cell.classList.add('completed');
       if (isToday) cell.classList.add('today-completed');
       emojiEl.textContent = EMOJI_COMPLETE;
@@ -412,7 +506,6 @@ function renderMonthly() {
       attachTooltip(cell, key, entry);
 
     } else if (isPast) {
-      // Missed day 💀
       cell.classList.add('missed');
       emojiEl.textContent = EMOJI_MISSED;
       cell.appendChild(numEl);
@@ -430,30 +523,11 @@ function renderMonthly() {
 
 // ─── Yearly heatmap ───────────────────────────────────────────────────────────
 
-/**
- * Renders the GitHub-style yearly heatmap for (current year + viewYearOffset).
- *
- * Layout:
- *   • Weeks run left→right (columns), days run top→bottom (rows, Mon at top).
- *   • The grid starts on the Monday of the week containing Jan 1, and ends
- *     on the Sunday of the week containing Dec 31 — padding with out-of-year
- *     cells so all columns are full 7-day weeks.
- *   • Month labels sit above the grid, each spanning its weeks.
- *
- * Cell colours (CSS classes):
- *   completed-low  → 1–7 day streak  (dim orange)
- *   completed-mid  → 8–30 day streak (mid orange)
- *   completed-high → 31+ day streak  (bright orange)
- *   missed         → past, not logged (dark red)
- *   (default)      → future or out-of-year (dark grey)
- */
 function renderYearly() {
   const displayYear = new Date().getFullYear() + viewYearOffset;
   $yearTitle.textContent = displayYear;
-
-  // Prevent navigating forward past the current year
   $prevYear.disabled = false;
-  $nextYear.disabled = (viewYearOffset >= 0);
+  $nextYear.disabled = viewYearOffset >= 0;
 
   $yearGrid.innerHTML    = '';
   $monthLabels.innerHTML = '';
@@ -461,17 +535,14 @@ function renderYearly() {
   const today    = new Date();
   const todayKey = getTodayKey();
 
-  // ── Grid bounds ────────────────────────────────────────────────
-  // Start: Monday of the week that contains January 1
+  // Grid spans from the Monday of the week containing Jan 1
+  // to the Sunday of the week containing Dec 31
   const gridStart = getMondayOf(new Date(displayYear, 0, 1));
+  const gridEnd   = getSundayOf(new Date(displayYear, 11, 31));
 
-  // End: Sunday of the week that contains December 31
-  const gridEnd  = getSundayOf(new Date(displayYear, 11, 31));
-
-  // ── Build week columns ─────────────────────────────────────────
+  // Build all week columns
   const weeks  = [];
   const cursor = new Date(gridStart);
-
   while (cursor <= gridEnd) {
     const week = [];
     for (let i = 0; i < 7; i++) {
@@ -481,35 +552,26 @@ function renderYearly() {
     weeks.push(week);
   }
 
-  // ── Month label positions ──────────────────────────────────────
-  // monthFirstWeek[m] = index of the first week column that contains a day
-  // in month m of displayYear. Used to position month name labels.
+  // Month label positions: first week index that contains a day of that month
   const monthFirstWeek = {};
-  weeks.forEach((week, weekIndex) => {
+  weeks.forEach((week, wi) => {
     week.forEach(day => {
       if (day.getFullYear() !== displayYear) return;
       const m = day.getMonth();
-      if (monthFirstWeek[m] === undefined) monthFirstWeek[m] = weekIndex;
+      if (monthFirstWeek[m] === undefined) monthFirstWeek[m] = wi;
     });
   });
 
-  // Render month labels as fixed-width spans
   for (let m = 0; m < 12; m++) {
     if (monthFirstWeek[m] === undefined) continue;
-
-    const nextMonthWeek = (m < 11)
-      ? (monthFirstWeek[m + 1] ?? weeks.length)
-      : weeks.length;
-
-    const widthPx = (nextMonthWeek - monthFirstWeek[m]) * YEAR_CELL_WIDTH_PX;
-    const label   = document.createElement('span');
+    const nextWeek = m < 11 ? (monthFirstWeek[m + 1] ?? weeks.length) : weeks.length;
+    const label = document.createElement('span');
     label.className   = 'month-label-item';
     label.textContent = MONTH_NAMES_SHORT[m];
-    label.style.width = widthPx + 'px';
+    label.style.width = (nextWeek - monthFirstWeek[m]) * YEAR_CELL_WIDTH_PX + 'px';
     $monthLabels.appendChild(label);
   }
 
-  // ── Render week columns and day cells ─────────────────────────
   weeks.forEach(week => {
     const weekEl = document.createElement('div');
     weekEl.className = 'year-week';
@@ -518,28 +580,25 @@ function renderYearly() {
       const cell     = document.createElement('div');
       const key      = getDateKey(day);
       const entry    = appDays[key];
-      const inYear   = (day.getFullYear() === displayYear);
-      const isFuture = (day > today);
+      const inYear   = day.getFullYear() === displayYear;
+      const isFuture = day > today;
 
       cell.className = 'year-cell';
       cell.setAttribute('aria-label', day.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }));
 
       if (inYear && !isFuture) {
         if (entry?.completed) {
-          // Colour intensity based on streak length at this specific day
-          const streakLength = getStreakAt(key);
-          if (streakLength <= STREAK_TIER_LOW)       cell.classList.add('completed-low');
-          else if (streakLength <= STREAK_TIER_MID)  cell.classList.add('completed-mid');
-          else                                        cell.classList.add('completed-high');
+          const s = getStreakAt(key);
+          if (s <= STREAK_TIER_LOW)      cell.classList.add('completed-low');
+          else if (s <= STREAK_TIER_MID) cell.classList.add('completed-mid');
+          else                           cell.classList.add('completed-high');
         } else {
           cell.classList.add('missed');
         }
         attachTooltip(cell, key, entry);
       }
-      // Out-of-year or future cells keep the default dark background
 
       if (key === todayKey) cell.classList.add('today-cell');
-
       weekEl.appendChild(cell);
     });
 
@@ -547,218 +606,494 @@ function renderYearly() {
   });
 }
 
-// ─── Date helpers for yearly grid ────────────────────────────────────────────
-
-/** Returns the Monday of the week containing `date` (mutates a copy). */
+// Returns the Monday of the week containing `date`
 function getMondayOf(date) {
   const d   = new Date(date);
-  const dow = d.getDay(); // 0=Sun … 6=Sat
-  // Distance to Monday: Sun→-6, Mon→0, Tue→-1 … Sat→-5 (in Mon-first system)
-  const offset = (dow === 0) ? -6 : 1 - dow;
-  d.setDate(d.getDate() + offset);
+  const dow = d.getDay();
+  d.setDate(d.getDate() + (dow === 0 ? -6 : 1 - dow));
   return d;
 }
 
-/** Returns the Sunday of the week containing `date` (mutates a copy). */
+// Returns the Sunday of the week containing `date`
 function getSundayOf(date) {
   const d   = new Date(date);
-  const dow = d.getDay(); // 0=Sun … 6=Sat
-  // Distance to Sunday: Sun→0, Mon→6, Tue→5 … Sat→1
-  const offset = (dow === 0) ? 0 : 7 - dow;
-  d.setDate(d.getDate() + offset);
+  const dow = d.getDay();
+  d.setDate(d.getDate() + (dow === 0 ? 0 : 7 - dow));
   return d;
 }
 
 // ─── Tooltip ──────────────────────────────────────────────────────────────────
 
-/**
- * Attaches hover listeners to a calendar cell to show/hide the tooltip.
- * The tooltip is a single shared DOM node repositioned on each show.
- *
- * @param {HTMLElement} cell  - the calendar cell element
- * @param {string}      key   - "YYYY-MM-DD" of this cell
- * @param {object|undefined} entry - { completed, note } from appDays, or undefined
- */
 function attachTooltip(cell, key, entry) {
-  cell.addEventListener('mouseenter', (e) => {
+  cell.addEventListener('mouseenter', e => {
     clearTimeout(tooltipTimeout);
     tooltipTimeout = setTimeout(() => showTooltip(e, key, entry), TOOLTIP_DELAY_MS);
   });
-
-  cell.addEventListener('mouseleave', () => {
-    clearTimeout(tooltipTimeout);
-    hideTooltip();
-  });
-
-  // Keep tooltip pinned to cursor while hovering
+  cell.addEventListener('mouseleave', () => { clearTimeout(tooltipTimeout); hideTooltip(); });
   cell.addEventListener('mousemove', positionTooltip);
 }
 
-/**
- * Builds and displays the tooltip for a given cell.
- * XSS-safe: all user-supplied note text passes through escapeHtml().
- */
 function showTooltip(e, key, entry) {
-  const date    = parseKey(key);
-  const dateStr = date.toLocaleDateString('en-US', {
+  const dateStr = parseKey(key).toLocaleDateString('en-US', {
     weekday: 'short', month: 'short', day: 'numeric', year: 'numeric',
   });
   const note = entry?.note?.trim() || '';
+  const noteHtml = entry?.completed
+    ? (note ? `<div class="tt-note">${escapeHtml(note)}</div>` : `<div class="tt-note">${EMOJI_COMPLETE} Logged</div>`)
+    : `<div class="tt-note" style="color:#555">Not logged</div>`;
 
-  let noteHtml;
-  if (entry?.completed) {
-    noteHtml = note
-      ? `<div class="tt-note">${escapeHtml(note)}</div>`
-      : `<div class="tt-note">${EMOJI_COMPLETE} Logged</div>`;
-  } else {
-    noteHtml = `<div class="tt-note" style="color:#555">Not logged</div>`;
-  }
-
-  $tooltip.innerHTML  = `<div class="tt-date">${dateStr}</div>${noteHtml}`;
+  $tooltip.innerHTML = `<div class="tt-date">${dateStr}</div>${noteHtml}`;
   $tooltip.classList.add('visible');
   positionTooltip(e);
 }
 
-/**
- * Positions the tooltip near the cursor, keeping it within the popup viewport.
- * Prefers above-and-right of cursor; flips left if it would overflow, and
- * flips below if it would overflow above.
- */
 function positionTooltip(e) {
   const tw = $tooltip.offsetWidth  || 180;
   const th = $tooltip.offsetHeight || 50;
-
   let x = e.clientX + 10;
   let y = e.clientY - th - 10;
-
-  // Overflow right → flip left
-  if (x + tw > window.innerWidth - 4)  x = e.clientX - tw - 10;
-  // Overflow top → flip below cursor
-  if (y < 4)                            y = e.clientY + 14;
-
+  if (x + tw > window.innerWidth  - 4) x = e.clientX - tw - 10;
+  if (y < 4)                           y = e.clientY + 14;
   $tooltip.style.left = x + 'px';
   $tooltip.style.top  = y + 'px';
 }
 
-function hideTooltip() {
-  $tooltip.classList.remove('visible');
-}
+function hideTooltip() { $tooltip.classList.remove('visible'); }
 
-/** Prevents XSS in tooltip note content. */
 function escapeHtml(str) {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 // ─── View switching ───────────────────────────────────────────────────────────
 
-/**
- * Switches between monthly and yearly views.
- * Adds a brief fade-in animation so the transition isn't jarring.
- *
- * @param {'monthly'|'yearly'} view
- */
 function switchView(view) {
   currentView = view;
-
-  const isMonthly = (view === 'monthly');
+  const isMonthly = view === 'monthly';
   $btnMonthly.classList.toggle('active', isMonthly);
   $btnYearly.classList.toggle('active', !isMonthly);
   $monthlyView.classList.toggle('hidden', !isMonthly);
-  $yearlyView.classList.toggle('hidden',  isMonthly);
+  $yearlyView.classList.toggle('hidden', isMonthly);
+  isMonthly ? renderMonthly() : renderYearly();
+  $calendarArea.classList.add('fade-in');
+  $calendarArea.addEventListener('animationend', () => $calendarArea.classList.remove('fade-in'), { once: true });
+}
 
-  if (isMonthly) {
-    renderMonthly();
-  } else {
-    renderYearly();
+// ─── Share card (PNG export) ──────────────────────────────────────────────────
+
+/**
+ * Draws an 800×400 share card on an offscreen canvas and returns it.
+ * Respects the current theme so light-mode users get a light card.
+ *
+ * Layout:
+ *   - Background matching current theme
+ *   - App name top-left
+ *   - Streak count (large, orange→pink gradient) + stat line
+ *   - Full year heatmap grid
+ *   - Footer tagline
+ */
+function buildShareCanvas() {
+  const W = 800, H = 400;
+  const canvas = document.createElement('canvas');
+  canvas.width  = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+
+  const isLight = appSettings.theme === 'light';
+
+  // Theme-aware colours
+  const colours = isLight ? {
+    bgFrom:    '#f4f2ef',
+    bgTo:      '#fff3e8',
+    appName:   '#9a9490',
+    dayLabel:  '#9a9490',
+    stats:     '#6b6460',
+    footer:    '#c8c0b8',
+    cellEmpty: '#e8e2dc',
+    cellMissed:'#f8d8d4',
+    cellLow:   '#fdba74',
+    cellMid:   '#f97316',
+    cellHigh:  '#ea580c',
+    cellToday: '#f97316',
+  } : {
+    bgFrom:    '#0f0f0f',
+    bgTo:      '#1a0800',
+    appName:   '#555555',
+    dayLabel:  '#666666',
+    stats:     '#888888',
+    footer:    '#333333',
+    cellEmpty: '#1c1c1e',
+    cellMissed:'#1c1416',
+    cellLow:   '#7c2d00',
+    cellMid:   '#c2410c',
+    cellHigh:  '#f97316',
+    cellToday: '#f97316',
+  };
+
+  // Background
+  const bg = ctx.createLinearGradient(0, 0, W, H);
+  bg.addColorStop(0, colours.bgFrom);
+  bg.addColorStop(1, colours.bgTo);
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  // Subtle radial glow
+  const glow = ctx.createRadialGradient(W / 2, 0, 0, W / 2, 0, H * 0.8);
+  glow.addColorStop(0, 'rgba(249,115,22,0.08)');
+  glow.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, W, H);
+
+  // App name
+  ctx.fillStyle = colours.appName;
+  ctx.font = '500 13px system-ui, sans-serif';
+  ctx.letterSpacing = '3px';
+  ctx.fillText('STREAK', 40, 46);
+
+  // Streak count — orange→pink gradient text
+  const streakCount = String(calcCurrentStreak(appDays));
+  ctx.font = 'bold 72px system-ui, sans-serif';
+  const grad = ctx.createLinearGradient(40, 0, 220, 0);
+  grad.addColorStop(0, '#f97316');
+  grad.addColorStop(1, '#ec4899');
+  ctx.fillStyle = grad;
+  ctx.fillText(streakCount, 40, 126);
+
+  // "day streak" label
+  ctx.fillStyle = colours.dayLabel;
+  ctx.font = '500 15px system-ui, sans-serif';
+  ctx.letterSpacing = '1px';
+  ctx.fillText('day streak', 40, 152);
+
+  // Stats line
+  const longest = calcLongestStreak(appDays);
+  const total   = calcTotal(appDays);
+  ctx.fillStyle = colours.stats;
+  ctx.font = '400 13px system-ui, sans-serif';
+  ctx.letterSpacing = '0px';
+  ctx.fillText(`Longest: ${longest} days   ·   Total: ${total} days`, 40, 180);
+
+  // Heatmap — replicate yearly grid logic
+  const displayYear = new Date().getFullYear();
+  const today       = new Date();
+  const todayKey    = getTodayKey();
+  const gridStart   = getMondayOf(new Date(displayYear, 0, 1));
+  const gridEnd     = getSundayOf(new Date(displayYear, 11, 31));
+
+  const CELL = 8, GAP = 2, COLS_X = 40, ROWS_Y = 210;
+  const cursor = new Date(gridStart);
+  let col = 0;
+
+  while (cursor <= gridEnd) {
+    for (let row = 0; row < 7; row++) {
+      const day    = new Date(cursor);
+      day.setDate(day.getDate() + row);
+
+      const key      = getDateKey(day);
+      const entry    = appDays[key];
+      const inYear   = day.getFullYear() === displayYear;
+      const isFuture = day > today;
+
+      let colour = colours.cellEmpty;
+      if (inYear && !isFuture) {
+        if (entry?.completed) {
+          const s = getStreakAt(key);
+          colour  = s <= STREAK_TIER_LOW ? colours.cellLow
+                  : s <= STREAK_TIER_MID ? colours.cellMid
+                  : colours.cellHigh;
+        } else {
+          colour = colours.cellMissed;
+        }
+      }
+      if (key === todayKey) colour = colours.cellToday;
+
+      ctx.fillStyle    = colour;
+      ctx.beginPath();
+      ctx.roundRect(COLS_X + col * (CELL + GAP), ROWS_Y + row * (CELL + GAP), CELL, CELL, 2);
+      ctx.fill();
+    }
+    cursor.setDate(cursor.getDate() + 7);
+    col++;
   }
 
-  // Brief fade-in so the content change doesn't feel abrupt
-  $calendarArea.classList.add('fade-in');
-  $calendarArea.addEventListener('animationend', () => {
-    $calendarArea.classList.remove('fade-in');
-  }, { once: true });
+  // Footer
+  ctx.fillStyle = colours.footer;
+  ctx.font = '400 12px system-ui, sans-serif';
+  ctx.letterSpacing = '0.5px';
+  ctx.fillText('Keep reading. Keep growing.  — streak', 40, H - 24);
+
+  return canvas;
+}
+
+function downloadShareCard() {
+  const canvas = buildShareCanvas();
+  canvas.toBlob(blob => {
+    const url  = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href     = url;
+    link.download = 'my-streak.png';
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }, 'image/png');
+}
+
+function copyShareCard() {
+  const canvas = buildShareCanvas();
+  canvas.toBlob(blob => {
+    navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+      .then(() => {
+        const orig = $shareCopyBtn.textContent;
+        $shareCopyBtn.textContent = '✓ Copied!';
+        setTimeout(() => { $shareCopyBtn.textContent = orig; }, 2000);
+      })
+      .catch(() => {
+        // Clipboard API may be blocked in some contexts — fall back to download
+        downloadShareCard();
+      });
+  }, 'image/png');
+}
+
+// ─── Friend challenge ─────────────────────────────────────────────────────────
+
+/**
+ * Encodes last 90 days as a compact bit string ("1" = completed, "0" = missed/unknown).
+ * Included in the challenge payload so the recipient can draw a mini heat strip.
+ */
+function encodeLast90Days(days) {
+  let bits = '';
+  const cursor = new Date();
+  cursor.setDate(cursor.getDate() - 89); // start 89 days ago
+  for (let i = 0; i < 90; i++) {
+    bits += days[getDateKey(cursor)]?.completed ? '1' : '0';
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return bits;
+}
+
+/**
+ * Generates a Base64-encoded challenge code containing public streak stats.
+ * Notes are deliberately excluded for privacy.
+ */
+function generateChallengeCode() {
+  const payload = {
+    v:       2,                                  // payload version
+    name:    appSettings.name?.trim() || 'Friend',
+    streak:  calcCurrentStreak(appDays),
+    longest: calcLongestStreak(appDays),
+    total:   calcTotal(appDays),
+    heat:    encodeLast90Days(appDays),
+    ts:      Date.now(),
+  };
+  // btoa produces standard Base64; strip padding for a cleaner-looking code
+  return btoa(JSON.stringify(payload)).replace(/=/g, '');
+}
+
+/**
+ * Decodes a challenge code. Returns the payload object, or null if invalid.
+ * Also returns null if the code is older than CHALLENGE_MAX_AGE_MS (7 days).
+ */
+function decodeChallengeCode(code) {
+  try {
+    // Re-add stripped padding before decoding
+    const padded  = code + '=='.slice(0, (4 - (code.length % 4)) % 4);
+    const payload = JSON.parse(atob(padded));
+    if (!payload?.v || !payload?.heat) return null;
+    if (Date.now() - payload.ts > CHALLENGE_MAX_AGE_MS) return { expired: true, name: payload.name };
+    return payload;
+  } catch {
+    return null; // malformed Base64 or JSON
+  }
+}
+
+/**
+ * Regenerates and displays the challenge code in the "Your Code" tab.
+ * Called on init (if challenge panel is open) and after saving today.
+ */
+function refreshChallengeCode() {
+  $generatedCode.value = generateChallengeCode();
+}
+
+/**
+ * Renders the side-by-side comparison panel from a decoded friend payload.
+ *
+ * Layout:
+ *   [Your name]   vs   [Friend name]
+ *   🔥 12 days         🔥 8 days
+ *   Longest: 29        Longest: 15
+ *   [heat strip]       [heat strip]
+ */
+function renderComparison(friend) {
+  const myStreak  = calcCurrentStreak(appDays);
+  const myLongest = calcLongestStreak(appDays);
+  const myHeat    = encodeLast90Days(appDays);
+  const myName    = appSettings.name?.trim() || 'You';
+
+  function heatStrip(bits) {
+    const wrap = document.createElement('div');
+    wrap.className = 'heat-strip';
+    // Show last 30 days for compactness
+    const recent = bits.slice(-30);
+    for (const bit of recent) {
+      const dot = document.createElement('div');
+      dot.className = 'heat-dot' + (bit === '1' ? ' on' : '');
+      wrap.appendChild(dot);
+    }
+    return wrap;
+  }
+
+  const grid = document.createElement('div');
+  grid.className = 'comparison-grid';
+
+  function col(name, streak, longest, heat, alignRight) {
+    const c = document.createElement('div');
+    c.className = 'comparison-col' + (alignRight ? ' right' : '');
+    c.innerHTML = `
+      <div class="comparison-name">${escapeHtml(name)}</div>
+      <div class="comparison-streak">🔥 ${streak}</div>
+      <div class="comparison-meta">Longest: ${longest} days</div>
+    `;
+    c.appendChild(heatStrip(heat));
+    return c;
+  }
+
+  const vs = document.createElement('div');
+  vs.className   = 'comparison-vs';
+  vs.textContent = 'vs';
+
+  grid.appendChild(col(myName,      myStreak,      myLongest,      myHeat,       false));
+  grid.appendChild(vs);
+  grid.appendChild(col(friend.name, friend.streak, friend.longest, friend.heat,  true));
+
+  $challengeResult.innerHTML = '';
+  $challengeResult.appendChild(grid);
 }
 
 // ─── Event listeners ──────────────────────────────────────────────────────────
 
-// View toggle buttons
+// Theme toggle
+$themeToggle.addEventListener('click', toggleTheme);
+
+// View toggle
 $btnMonthly.addEventListener('click', () => switchView('monthly'));
 $btnYearly.addEventListener('click',  () => switchView('yearly'));
 
-// Monthly nav arrows
+// Month navigation
 $prevMonth.addEventListener('click', () => {
   viewMonth--;
   if (viewMonth < 0) { viewMonth = 11; viewYear--; }
   renderMonthly();
 });
-
 $nextMonth.addEventListener('click', () => {
   const today = new Date();
-  // Guard: never navigate past current month (button is also disabled, but be safe)
   if (viewYear === today.getFullYear() && viewMonth >= today.getMonth()) return;
   viewMonth++;
   if (viewMonth > 11) { viewMonth = 0; viewYear++; }
   renderMonthly();
 });
 
-// Yearly nav arrows
-$prevYear.addEventListener('click', () => {
-  viewYearOffset--;
-  renderYearly();
-});
-
+// Year navigation
+$prevYear.addEventListener('click', () => { viewYearOffset--; renderYearly(); });
 $nextYear.addEventListener('click', () => {
-  if (viewYearOffset >= 0) return; // guard: can't go to the future
+  if (viewYearOffset >= 0) return;
   viewYearOffset++;
   renderYearly();
 });
 
-// Mark Today — opens the note panel
+// Mark Today
 $markBtn.addEventListener('click', () => {
-  if (appDays[getTodayKey()]?.completed) return; // already logged, ignore
+  if (appDays[getTodayKey()]?.completed) return;
   openNotePanel();
   $markBtn.textContent = 'Adding note…';
   $markBtn.disabled    = true;
 });
+$noteCancel.addEventListener('click',  () => { closeNotePanel(); updateMarkButton(); });
+$noteConfirm.addEventListener('click', saveToday);
+$noteInput.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) saveToday(); });
 
-// Note panel — cancel
-$noteCancel.addEventListener('click', () => {
-  closeNotePanel();
-  updateMarkButton(); // restore button to "Mark Today"
+// Share buttons
+$shareDownloadBtn.addEventListener('click', downloadShareCard);
+$shareCopyBtn.addEventListener('click', copyShareCard);
+
+// Challenge toggle (expand/collapse)
+$challengeToggle.addEventListener('click', () => {
+  const isOpen = $challengeSection.classList.toggle('open');
+  $challengeBody.classList.toggle('hidden', !isOpen);
+  $challengeToggle.setAttribute('aria-expanded', isOpen);
+  if (isOpen) refreshChallengeCode();
 });
 
-// Note panel — confirm (button)
-$noteConfirm.addEventListener('click', saveToday);
+// Challenge tabs
+[$tabYourCode, $tabEnterCode].forEach(tab => {
+  tab.addEventListener('click', () => {
+    const isYours = tab === $tabYourCode;
+    $tabYourCode.classList.toggle('active', isYours);
+    $tabEnterCode.classList.toggle('active', !isYours);
+    $panelYourCode.classList.toggle('hidden', !isYours);
+    $panelEnterCode.classList.toggle('hidden', isYours);
+  });
+});
 
-// Note panel — confirm (keyboard shortcut: Cmd+Enter or Ctrl+Enter)
-$noteInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-    saveToday();
+// Challenge: update code when name changes
+$userName.addEventListener('input', () => {
+  appSettings.name = $userName.value.trim();
+  saveSettings();
+  refreshChallengeCode();
+});
+
+// Challenge: copy code
+$copyCodeBtn.addEventListener('click', () => {
+  navigator.clipboard.writeText($generatedCode.value).then(() => {
+    const orig = $copyCodeBtn.textContent;
+    $copyCodeBtn.textContent = '✓ Copied!';
+    setTimeout(() => { $copyCodeBtn.textContent = orig; }, 2000);
+  });
+});
+
+// Challenge: compare with friend's code
+$compareBtn.addEventListener('click', () => {
+  const code    = $friendCodeInput.value.trim();
+  $challengeResult.innerHTML = '';
+
+  if (!code) return;
+
+  const payload = decodeChallengeCode(code);
+
+  if (!payload) {
+    $challengeResult.innerHTML = '<div class="challenge-error">⚠️ Invalid code. Ask your friend to generate a fresh one.</div>';
+    return;
   }
+  if (payload.expired) {
+    $challengeResult.innerHTML = `<div class="challenge-error">⏰ This code from <strong>${escapeHtml(payload.name)}</strong> has expired (codes last 7 days). Ask them to share a new one.</div>`;
+    return;
+  }
+
+  renderComparison(payload);
 });
 
 // ─── Initialisation ───────────────────────────────────────────────────────────
 
 /**
- * Entry point — loads persisted data from storage, then renders the UI.
- * Everything hangs off this callback; the popup is blank until storage responds.
+ * Entry point — reads storage, applies theme, then renders everything.
+ * All rendering waits for this callback so the popup is never in a partial state.
  */
-chrome.storage.local.get(['days', 'longestStreak'], (result) => {
+chrome.storage.local.get(['days', 'longestStreak', 'settings'], (result) => {
   appDays = result.days || {};
 
-  // If the computed longest streak is higher than the stored value
-  // (e.g. the background worker missed a rollover), fix it silently.
-  const computedLongest = calcLongestStreak(appDays);
-  const storedLongest   = result.longestStreak || 0;
-  if (computedLongest > storedLongest) {
-    chrome.storage.local.set({ longestStreak: computedLongest });
+  // Restore settings (theme + display name)
+  if (result.settings) {
+    appSettings = { ...appSettings, ...result.settings };
   }
+  applyTheme(appSettings.theme || 'dark');
 
+  // Pre-fill name field if saved
+  if (appSettings.name) $userName.value = appSettings.name;
+
+  // Silently fix longestStreak if it's stale (e.g. missed a rollover)
+  const computed = calcLongestStreak(appDays);
+  const stored   = result.longestStreak || 0;
+  if (computed > stored) chrome.storage.local.set({ longestStreak: computed });
+
+  renderQuote();
   updateStats();
   updateMarkButton();
-  switchView('monthly'); // always open on monthly view
+  switchView('monthly');
 });

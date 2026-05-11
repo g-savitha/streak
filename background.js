@@ -16,7 +16,11 @@
  *     days: {
  *       "YYYY-MM-DD": { completed: boolean, note: string }
  *     },
- *     longestStreak: number   // cached to avoid recomputing on every popup open
+ *     longestStreak: number,   // cached to avoid recomputing on every popup open
+ *     settings: {
+ *       name: string,          // display name for challenge codes
+ *       theme: string          // 'dark' | 'light'
+ *     }
  *   }
  */
 
@@ -197,6 +201,19 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 
 /**
+ * Motivational reminder messages — rotated by day-of-month so it feels fresh.
+ * Chosen to feel encouraging rather than nagging.
+ */
+const REMINDER_MESSAGES = [
+  "There's still time — even 10 minutes of reading counts. You've got this! 🔥",
+  "Your streak is waiting. A few pages before midnight keeps it alive 💪",
+  "Don't let today slip away. You're one habit away from a new high streak!",
+  "Hey! The best time to read is right now. Your future self will thank you 📚",
+  "Small steps, big dreams. Log today's reading before midnight 🌙",
+  "You've built something beautiful. Don't let it end tonight — go read! ✨",
+];
+
+/**
  * 9 PM reminder: send a notification only if today hasn't been logged.
  * If she already logged, stay silent — no need to nag.
  */
@@ -210,11 +227,14 @@ function handleReminderAlarm() {
       return;
     }
 
+    // Rotate through messages by day-of-month so it feels fresh each day
+    const msg = REMINDER_MESSAGES[new Date().getDate() % REMINDER_MESSAGES.length];
+
     chrome.notifications.create(ALARM_REMINDER, {
       type:     'basic',
       iconUrl:  'icons/icon128.png',
       title:    "Don't break your streak! 🔥",
-      message:  "Log today's reading before midnight to keep your streak alive.",
+      message:  msg,
       priority: 2,
     });
 

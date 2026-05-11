@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -8,48 +8,71 @@
 </head>
 <body>
   <!--
-    popup.html — Streak Extension
-    All content is populated by popup.js on load.
-    IDs prefixed with no convention — popup.js uses getElementById throughout.
+    popup.html — Streak Extension v2
+    All dynamic content is populated by popup.js on load.
 
     Layout order (top → bottom):
-      1. .header      — app name + current streak number
-      2. .stats-bar   — longest streak + total days
-      3. .view-toggle — Monthly / Yearly pill switch
-      4. .calendar-area — the active calendar view (monthly or yearly)
-      5. .mark-section  — "Mark Today" CTA + note textarea
-      6. #tooltip       — shared floating tooltip (positioned by JS)
+      0. #confettiCanvas    — fixed overlay for confetti animation
+      1. #celebrationBanner — slides in after marking today
+      2. .header            — app name + streak count + theme toggle
+      3. #quoteBar          — daily motivational quote
+      4. .stats-bar         — longest streak + total days
+      5. .view-toggle       — Monthly / Yearly pill switch
+      6. .calendar-area     — active calendar + share button (yearly only)
+      7. .mark-section      — "Mark Today" CTA + note textarea
+      8. #challengeSection  — collapsible friend challenge panel
+      9. #tooltip           — shared floating tooltip
   -->
+
+  <!-- ── 0. Confetti canvas (fixed overlay, pointer-events: none) ──────────── -->
+  <canvas id="confettiCanvas" aria-hidden="true"></canvas>
 
   <div class="app" role="main">
 
-    <!-- ── 1. Header ─────────────────────────────────────────────────────── -->
+    <!-- ── 1. Celebration banner (slides down after marking today) ────────── -->
+    <!--
+      Hidden by default. JS calls showCelebration() which:
+        - sets the quote text
+        - adds class .visible  (slides down)
+        - removes .visible after 3s (slides back up + fades)
+    -->
+    <div class="celebration-banner" id="celebrationBanner" aria-live="polite" aria-hidden="true"></div>
+
+    <!-- ── 2. Header ─────────────────────────────────────────────────────── -->
     <header class="header">
+      <!-- Theme toggle: sun (light) / moon (dark). JS sets icon + persists to storage -->
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle light/dark mode" title="Toggle theme">
+        <span id="themeIcon">🌙</span>
+      </button>
+
       <div class="app-name" aria-hidden="true">streak</div>
       <div class="streak-display" aria-label="Current streak">
         <span class="streak-fire" aria-hidden="true">🔥</span>
-        <!-- JS writes the streak count here -->
         <span class="streak-count" id="currentStreak" aria-live="polite">0</span>
       </div>
       <div class="streak-label">day streak</div>
     </header>
 
-    <!-- ── 2. Stats bar ───────────────────────────────────────────────────── -->
+    <!-- ── 3. Daily quote bar ─────────────────────────────────────────────── -->
+    <!-- JS calls renderQuote() which sets #quoteText content -->
+    <div class="quote-bar" id="quoteBar" aria-label="Daily quote">
+      <span class="quote-text" id="quoteText"></span>
+    </div>
+
+    <!-- ── 4. Stats bar ───────────────────────────────────────────────────── -->
     <div class="stats-bar" role="region" aria-label="All-time stats">
       <div class="stat">
         <span class="stat-label">Longest</span>
-        <!-- JS writes "N days" here -->
         <span class="stat-value" id="longestStreak" aria-live="polite">0 days</span>
       </div>
       <div class="stat-divider" aria-hidden="true"></div>
       <div class="stat">
         <span class="stat-label">Total</span>
-        <!-- JS writes "N days" here -->
         <span class="stat-value" id="totalDays" aria-live="polite">0 days</span>
       </div>
     </div>
 
-    <!-- ── 3. View toggle ─────────────────────────────────────────────────── -->
+    <!-- ── 5. View toggle ─────────────────────────────────────────────────── -->
     <div class="view-toggle" role="group" aria-label="Calendar view">
       <button class="toggle-btn active" id="btnMonthly"
               data-view="monthly" aria-pressed="true">Monthly</button>
@@ -57,59 +80,50 @@
               data-view="yearly" aria-pressed="false">Yearly</button>
     </div>
 
-    <!-- ── 4. Calendar area ───────────────────────────────────────────────── -->
+    <!-- ── 6. Calendar area ───────────────────────────────────────────────── -->
     <div class="calendar-area" id="calendarArea" role="region" aria-label="Calendar">
 
-      <!-- Monthly view: rendered by renderMonthly() in popup.js -->
+      <!-- Monthly view -->
       <div class="monthly-view" id="monthlyView" role="grid" aria-label="Monthly calendar">
         <div class="month-nav">
           <button class="nav-arrow" id="prevMonth" aria-label="Previous month">&#8249;</button>
-          <!-- JS writes "Month YYYY" here -->
           <span class="month-title" id="monthTitle" aria-live="polite">May 2026</span>
           <button class="nav-arrow" id="nextMonth" aria-label="Next month">&#8250;</button>
         </div>
-        <!-- Day-of-week column headers -->
         <div class="day-headers" role="row" aria-hidden="true">
           <span>Mon</span><span>Tue</span><span>Wed</span>
           <span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
         </div>
-        <!-- JS populates day cells here -->
         <div class="month-grid" id="monthGrid"></div>
       </div>
 
-      <!-- Yearly view: rendered by renderYearly() in popup.js -->
+      <!-- Yearly view -->
       <div class="yearly-view hidden" id="yearlyView" role="region" aria-label="Yearly heatmap">
         <div class="year-nav">
           <button class="nav-arrow" id="prevYear" aria-label="Previous year">&#8249;</button>
-          <!-- JS writes the year here -->
           <span class="year-title" id="yearTitle" aria-live="polite">2026</span>
           <button class="nav-arrow" id="nextYear" aria-label="Next year">&#8250;</button>
+          <!-- Share buttons — only visible in yearly view -->
+          <div class="share-actions">
+            <button class="share-btn" id="shareDownloadBtn" title="Download streak card as PNG" aria-label="Download streak card">
+              ↓ Save
+            </button>
+            <button class="share-btn share-copy" id="shareCopyBtn" title="Copy streak card to clipboard" aria-label="Copy streak card">
+              📋 Copy
+            </button>
+          </div>
         </div>
         <div class="year-grid-wrapper">
-          <!-- JS writes month name spans here, one per month -->
           <div class="month-labels" id="monthLabels" aria-hidden="true"></div>
-          <!-- JS writes week columns (each containing 7 day cells) here -->
           <div class="year-grid" id="yearGrid"></div>
         </div>
       </div>
 
     </div>
 
-    <!-- ── 5. Mark Today section ──────────────────────────────────────────── -->
+    <!-- ── 7. Mark Today section ──────────────────────────────────────────── -->
     <div class="mark-section" id="markSection">
-      <!--
-        States managed by popup.js:
-          default  → "Mark Today" (orange, enabled)
-          open     → "Adding note…" (disabled while note panel is visible)
-          logged   → "✓ Logged today" (green, disabled)
-      -->
       <button class="mark-btn" id="markBtn" aria-label="Mark today as read">Mark Today</button>
-
-      <!--
-        Note input panel — hidden by default.
-        Slides open when Mark Today is clicked (via CSS max-height transition).
-        Keyboard shortcut: Cmd/Ctrl+Enter to confirm.
-      -->
       <div class="note-input-area hidden" id="noteInputArea"
            role="form" aria-label="Add a reading note">
         <textarea class="note-input" id="noteInput"
@@ -125,13 +139,62 @@
       </div>
     </div>
 
+    <!-- ── 8. Friend challenge section ───────────────────────────────────── -->
+    <!--
+      Collapsible. JS toggles .open on #challengeSection.
+      Two tabs inside: "Your Code" and "Enter Code".
+    -->
+    <div class="challenge-section" id="challengeSection" aria-label="Friend challenge">
+
+      <button class="challenge-toggle" id="challengeToggle" aria-expanded="false">
+        <span class="challenge-toggle-icon">⚔️</span>
+        Challenge a Friend
+        <span class="challenge-caret" aria-hidden="true">›</span>
+      </button>
+
+      <div class="challenge-body hidden" id="challengeBody">
+
+        <!-- Tab switcher -->
+        <div class="challenge-tabs" role="tablist">
+          <button class="challenge-tab active" id="tabYourCode"
+                  role="tab" aria-selected="true" data-tab="your-code">Your Code</button>
+          <button class="challenge-tab" id="tabEnterCode"
+                  role="tab" aria-selected="false" data-tab="enter-code">Enter a Code</button>
+        </div>
+
+        <!-- Tab: Your Code -->
+        <div class="challenge-panel" id="panelYourCode" role="tabpanel">
+          <p class="challenge-hint">Share this code with a friend so they can see your streak.</p>
+          <div class="challenge-name-row">
+            <input type="text" class="challenge-input" id="userName"
+                   placeholder="Your name (optional)" maxlength="30"
+                   aria-label="Your display name" />
+          </div>
+          <div class="challenge-code-row">
+            <input type="text" class="challenge-code-field" id="generatedCode"
+                   readonly aria-label="Your challenge code" />
+            <button class="challenge-copy-btn" id="copyCodeBtn" aria-label="Copy code">Copy</button>
+          </div>
+        </div>
+
+        <!-- Tab: Enter a Code -->
+        <div class="challenge-panel hidden" id="panelEnterCode" role="tabpanel">
+          <p class="challenge-hint">Paste a friend's code to compare streaks.</p>
+          <div class="challenge-code-row">
+            <input type="text" class="challenge-input" id="friendCodeInput"
+                   placeholder="Paste code here…" aria-label="Friend's challenge code" />
+            <button class="challenge-compare-btn" id="compareBtn" aria-label="Compare streaks">Go</button>
+          </div>
+          <!-- JS renders comparison result or error here -->
+          <div class="challenge-result" id="challengeResult"></div>
+        </div>
+
+      </div>
+    </div>
+
   </div><!-- /.app -->
 
-  <!-- ── 6. Tooltip ─────────────────────────────────────────────────────── -->
-  <!--
-    Shared tooltip for all calendar cells. Positioned and populated by JS.
-    pointer-events: none in CSS so it never blocks hover events on cells.
-  -->
+  <!-- ── 9. Tooltip ─────────────────────────────────────────────────────── -->
   <div class="tooltip" id="tooltip" role="tooltip" aria-hidden="true"></div>
 
   <script src="popup.js"></script>
