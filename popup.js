@@ -1,18 +1,16 @@
 /**
- * popup.js — Streak Extension v2 UI
+ * popup.js — Streak Extension v3 UI
  *
- * New in v2:
- *   • Daily motivational quote (stable per day, no storage needed)
- *   • Confetti + celebration banner on marking today
- *   • Light/dark theme toggle (persisted to storage)
- *   • Shareable PNG export of yearly heatmap + stats card
- *   • Code-based friend challenge (Base64 encoded, no backend)
- *   • Missed day emoji changed from 💀 to 😢
- *   • Gradient UI
+ * New in v3:
+ *   • Multi-category habit tracking (create any habit, independent streaks)
+ *   • Multiple notes per day per category (append entries at any time)
+ *   • Persistent friend streak (saved friend auto-loads in challenge panel + new tab)
+ *   • New tab wallpaper (newtab.html reads same storage)
+ *   • Schema migration from v2 flat days → nested days[date][catId]
  *
- * Data flow (unchanged from v1):
- *   chrome.storage.local → appDays (in-memory) → render → DOM
- *   User action → update appDays → chrome.storage.local.set → re-render
+ * Data flow:
+ *   chrome.storage.local → appDays / appCategories / appFriend → render → DOM
+ *   User action → update in-memory → chrome.storage.local.set → re-render
  */
 
 'use strict';
@@ -20,86 +18,27 @@
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const EMOJI_COMPLETE = '🔥';
-const EMOJI_MISSED   = '😢';  // v2: changed from 💀 to be encouraging not punishing
+const EMOJI_MISSED   = '😢';
 
-// Streak length thresholds for heatmap colour tiers (yearly view)
-const STREAK_TIER_LOW = 7;   // 1–7  → dim orange
-const STREAK_TIER_MID = 30;  // 8–30 → mid orange  /  31+ → bright orange
+const STREAK_TIER_LOW = 7;
+const STREAK_TIER_MID = 30;
 
 const TOOLTIP_DELAY_MS  = 200;
 const NOTE_ANIMATE_MS   = 400;
-const CELEBRATION_MS    = 3000; // how long the celebration banner stays visible
-
-// Yearly heatmap: cell width (9px) + gap (2px) = 11px per week column.
-// Must stay in sync with .year-cell and .year-grid { gap } in popup.css.
+const CELEBRATION_MS    = 3000;
 const YEAR_CELL_WIDTH_PX = 11;
 
-const MONTH_NAMES_SHORT  = ['Jan','Feb','Mar','Apr','May','Jun',
-                            'Jul','Aug','Sep','Oct','Nov','Dec'];
+const MONTH_NAMES_SHORT = ['Jan','Feb','Mar','Apr','May','Jun',
+                           'Jul','Aug','Sep','Oct','Nov','Dec'];
 
-// Challenge codes older than this are considered expired
-const CHALLENGE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const CHALLENGE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
-// ─── Daily motivational quotes ────────────────────────────────────────────────
+const PRESET_EMOJIS = ['📚','🏋️','🧘','🎸','🎨','✍️','🏃','🍎','💻','🌱','🎯','🎮'];
 
-/**
- * Shown in the quote bar at the top of the popup.
- * Selection is stable per calendar day: index = floor(now / MS_PER_DAY) % length
- * so it changes exactly at midnight without requiring storage.
- */
-const QUOTES = [
-  // APJ Abdul Kalam
-  "You have to dream before your dreams can come true. — APJ Abdul Kalam",
-  "Excellence is a continuous process and not an accident. — APJ Abdul Kalam",
-  "If you want to shine like a sun, first burn like a sun. — APJ Abdul Kalam",
-  "Learning gives creativity, creativity leads to thinking, thinking provides knowledge, knowledge makes you great. — APJ Abdul Kalam",
+const DEFAULT_CATEGORY = { id: 'reading', name: 'Reading', emoji: '📚', createdAt: 0 };
 
-  // Swami Vivekananda
-  "Arise, awake and do not stop until the goal is reached. — Swami Vivekananda",
-  "Take up one idea. Make it your life — think of it, dream of it, live on it. — Swami Vivekananda",
-  "All the strength and succour you want is within yourself. — Swami Vivekananda",
-  "The greatest sin is to think yourself weak. — Swami Vivekananda",
+// ─── Celebration quotes ───────────────────────────────────────────────────────
 
-  // Steve Jobs
-  "Stay hungry, stay foolish. — Steve Jobs",
-  "The people who are crazy enough to think they can change the world are the ones who do. — Steve Jobs",
-  "Your time is limited, so don't waste it living someone else's life. — Steve Jobs",
-  "The only way to do great work is to love what you do. — Steve Jobs",
-
-  // Jack Ma
-  "Today is hard, tomorrow will be worse, but the day after tomorrow will be sunshine. — Jack Ma",
-  "If you don't give up, you still have a chance. — Jack Ma",
-  "No matter how tough the chase is, you should always have the dream you saw on the first day. — Jack Ma",
-
-  // Elon Musk
-  "When something is important enough, you do it even if the odds are not in your favour. — Elon Musk",
-  "Persistence is very important. You should not give up unless you are forced to give up. — Elon Musk",
-  "Work like hell. I mean you just have to put in 80–100 hour weeks every week. — Elon Musk",
-
-  // Gary Vaynerchuk
-  "Every day is a new opportunity to grow. Use it. — Gary Vee",
-
-  // Naval Ravikant
-  "Read what you love until you love to read. — Naval Ravikant",
-  "The best investment you can make is in yourself. — Naval Ravikant",
-  "Specific knowledge is knowledge you cannot be trained for. — Naval Ravikant",
-  "A calm mind, a fit body, a house full of books. Pick three. — Naval Ravikant",
-
-  // Warren Buffett
-  "The more you learn, the more you earn. — Warren Buffett",
-  "Someone is sitting in the shade today because someone planted a tree a long time ago. — Warren Buffett",
-
-  // James Clear
-  "You do not rise to the level of your goals. You fall to the level of your systems. — James Clear",
-  "Every action you take is a vote for the type of person you wish to become. — James Clear",
-  "The most practical way to change who you are is to change what you do. — James Clear",
-  "Success is the product of daily habits — not once-in-a-lifetime transformations. — James Clear",
-];
-
-/**
- * Shown in the celebration banner after marking today complete.
- * Picked randomly each time for variety.
- */
 const CELEBRATION_QUOTES = [
   "🎉 You showed up today. That's everything.",
   "🔥 Another day, another victory. You're on fire!",
@@ -107,7 +46,6 @@ const CELEBRATION_QUOTES = [
   "🌟 That's what consistency looks like. Keep it up!",
   "💪 Done! You're building something extraordinary.",
   "🚀 One more day added to your legend. Let's go!",
-  "📚 You read today. That's not small — that's huge.",
   "🎯 Nailed it! Your streak grows stronger.",
   "⚡ You did the thing. Champions log every day.",
   "🏆 Today? Crushed. Tomorrow? Same energy!",
@@ -115,15 +53,16 @@ const CELEBRATION_QUOTES = [
 
 // ─── Application state ────────────────────────────────────────────────────────
 
-/** In-memory mirror of chrome.storage.local { days }. Always written through to storage. */
-let appDays = {};
-
-/** App settings — theme and display name for challenges. */
-let appSettings = { theme: 'dark', name: '' };
+let appDays          = {};
+let appCategories    = [DEFAULT_CATEGORY];
+let appLongestStreaks = {};
+let appFriends       = [];   // array of up to 3 saved friends
+let appSettings      = { theme: 'dark', name: '', activeCategoryId: '' };
+let activeCatId      = 'reading';
 
 let viewMonth      = new Date().getMonth();
 let viewYear       = new Date().getFullYear();
-let viewYearOffset = 0;   // 0 = current year, -1 = last year, etc.
+let viewYearOffset = 0;
 let currentView    = 'monthly';
 let tooltipTimeout = null;
 
@@ -145,6 +84,12 @@ const $noteInputArea    = document.getElementById('noteInputArea');
 const $noteInput        = document.getElementById('noteInput');
 const $noteCancel       = document.getElementById('noteCancel');
 const $noteConfirm      = document.getElementById('noteConfirm');
+const $entryList        = document.getElementById('entryList');
+const $addNoteBtn       = document.getElementById('addNoteBtn');
+const $addNoteArea      = document.getElementById('addNoteArea');
+const $addNoteInput     = document.getElementById('addNoteInput');
+const $addNoteCancel    = document.getElementById('addNoteCancel');
+const $addNoteConfirm   = document.getElementById('addNoteConfirm');
 const $btnMonthly       = document.getElementById('btnMonthly');
 const $btnYearly        = document.getElementById('btnYearly');
 const $prevMonth        = document.getElementById('prevMonth');
@@ -172,98 +117,62 @@ const $copyCodeBtn      = document.getElementById('copyCodeBtn');
 const $friendCodeInput  = document.getElementById('friendCodeInput');
 const $compareBtn       = document.getElementById('compareBtn');
 const $challengeResult  = document.getElementById('challengeResult');
+const $savedFriendsPanel = document.getElementById('savedFriendsPanel');
+const $categoryTabs     = document.getElementById('categoryTabs');
+const $addCategoryModal = document.getElementById('addCategoryModal');
+const $newCatName       = document.getElementById('newCatName');
+const $newCatEmoji      = document.getElementById('newCatEmoji');
+const $addCatConfirm    = document.getElementById('addCatConfirm');
+const $addCatCancel     = document.getElementById('addCatCancel');
+const $emojiPicker      = document.getElementById('emojiPicker');
 
-// ─── Date utilities ───────────────────────────────────────────────────────────
+// ─── Migration ────────────────────────────────────────────────────────────────
 
-/**
- * Returns "YYYY-MM-DD" in LOCAL time.
- * Never use toISOString() — it returns UTC and can be a different calendar
- * date near midnight depending on the user's timezone.
- */
-function getDateKey(date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
+function needsMigration(days) {
+  const vals = Object.values(days);
+  if (!vals.length) return false;
+  const first = vals[0];
+  // Old schema: { completed: bool, note: string }
+  // New schema: { [catId]: { completed, entries } }
+  return typeof first.completed === 'boolean';
 }
 
-function getTodayKey() { return getDateKey(new Date()); }
-
-/**
- * Parses "YYYY-MM-DD" into a local-time Date at midnight.
- * `new Date("YYYY-MM-DD")` would parse as UTC — this avoids that.
- */
-function parseKey(key) {
-  const [y, m, d] = key.split('-').map(Number);
-  return new Date(y, m - 1, d);
-}
-
-function formatMonthYear(year, month) {
-  return new Date(year, month).toLocaleDateString('en-US', {
-    month: 'long', year: 'numeric',
+function migrateData(result) {
+  const oldDays = result.days || {};
+  const newDays = {};
+  for (const [date, entry] of Object.entries(oldDays)) {
+    newDays[date] = {
+      reading: {
+        completed: entry.completed,
+        entries: entry.note ? [{ text: entry.note, ts: 0 }] : [],
+      },
+    };
+  }
+  const longestStreaks = { reading: result.longestStreak || 0 };
+  chrome.storage.local.set({
+    days: newDays,
+    categories: [DEFAULT_CATEGORY],
+    longestStreaks,
   });
+  return { days: newDays, categories: [DEFAULT_CATEGORY], longestStreaks };
 }
 
-// ─── Streak calculations ──────────────────────────────────────────────────────
+// ─── Active category slice ────────────────────────────────────────────────────
 
-/**
- * Current streak: consecutive completed days ending at today (or yesterday
- * if today isn't logged yet). Drops to 0 only after midnight if today is missed.
- */
-function calcCurrentStreak(days) {
-  const todayKey = getTodayKey();
-  const cursor   = new Date();
-  if (!days[todayKey]?.completed) cursor.setDate(cursor.getDate() - 1);
-
-  let streak = 0;
-  while (true) {
-    const key = getDateKey(cursor);
-    if (days[key]?.completed) { streak++; cursor.setDate(cursor.getDate() - 1); }
-    else break;
+function getActiveDaysSlice() {
+  const slice = {};
+  for (const [date, cats] of Object.entries(appDays)) {
+    if (cats[activeCatId]) slice[date] = cats[activeCatId];
   }
-  return streak;
+  return slice;
 }
 
-/** Longest consecutive completed-day run across all history. */
-function calcLongestStreak(days) {
-  const keys = Object.keys(days).filter(k => days[k].completed).sort();
-  let longest = 0, current = 0, prevDate = null;
-  for (const key of keys) {
-    const date = new Date(key + 'T00:00:00');
-    const diff = prevDate ? Math.round((date - prevDate) / 86_400_000) : null;
-    current    = diff === 1 ? current + 1 : 1;
-    if (current > longest) longest = current;
-    prevDate = date;
-  }
-  return longest;
-}
-
-/** Total completed days ever. */
-function calcTotal(days) {
-  return Object.values(days).filter(e => e.completed).length;
-}
-
-/**
- * Streak length ending at a specific day (looking backwards).
- * Used to pick the correct colour tier for heatmap cells.
- */
-function getStreakAt(key) {
-  const cursor = parseKey(key);
-  let streak = 0;
-  while (true) {
-    const k = getDateKey(cursor);
-    if (appDays[k]?.completed) { streak++; cursor.setDate(cursor.getDate() - 1); }
-    else break;
-  }
-  return streak;
+function getActiveCategory() {
+  return appCategories.find(c => c.id === activeCatId) || appCategories[0];
 }
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
 
-/**
- * Applies the given theme to <html data-theme="..."> and updates the icon.
- * Does NOT persist — call saveSettings() separately if needed.
- */
 function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
   $themeIcon.textContent = theme === 'dark' ? '🌙' : '☀️';
@@ -285,9 +194,10 @@ function saveSettings() {
 // ─── Stats update ─────────────────────────────────────────────────────────────
 
 function updateStats() {
-  const current = calcCurrentStreak(appDays);
-  const longest = calcLongestStreak(appDays);
-  const total   = calcTotal(appDays);
+  const slice   = getActiveDaysSlice();
+  const current = calcCurrentStreak(slice);
+  const longest = calcLongestStreak(slice);
+  const total   = calcTotal(slice);
   $currentStreak.textContent = current;
   $longestStreak.textContent = longest + (longest === 1 ? ' day' : ' days');
   $totalDays.textContent     = total   + (total   === 1 ? ' day' : ' days');
@@ -295,32 +205,155 @@ function updateStats() {
 
 // ─── Daily quote ──────────────────────────────────────────────────────────────
 
-/**
- * Picks today's quote using a stable day-based index — same quote all day,
- * changes at midnight, no storage required.
- */
 function renderQuote() {
-  const index = Math.floor(Date.now() / 86_400_000) % QUOTES.length;
-  $quoteText.textContent = QUOTES[index];
+  $quoteText.textContent = getQuoteOfDay();
 }
 
-// ─── Mark Today button state ──────────────────────────────────────────────────
+// ─── Category tabs ────────────────────────────────────────────────────────────
 
-function updateMarkButton() {
-  const entry = appDays[getTodayKey()];
+function renderCategoryTabs() {
+  $categoryTabs.innerHTML = '';
+  for (const cat of appCategories) {
+    const btn = document.createElement('button');
+    btn.className = 'cat-pill' + (cat.id === activeCatId ? ' active' : '');
+    btn.dataset.catId = cat.id;
+    btn.textContent = cat.emoji + ' ' + cat.name;
+    btn.setAttribute('aria-pressed', cat.id === activeCatId);
+    btn.addEventListener('click', () => switchCategory(cat.id));
+    $categoryTabs.appendChild(btn);
+  }
+
+  const addBtn = document.createElement('button');
+  addBtn.className = 'cat-pill cat-add-btn';
+  addBtn.textContent = '+ Add';
+  addBtn.setAttribute('aria-label', 'Add new habit category');
+  addBtn.addEventListener('click', openAddCategoryModal);
+  $categoryTabs.appendChild(addBtn);
+}
+
+function switchCategory(catId) {
+  activeCatId = catId;
+  appSettings.activeCategoryId = catId;
+  saveSettings();
+  renderCategoryTabs();
+  updateStats();
+  refreshCalendar();
+  updateMarkSection();
+}
+
+function openAddCategoryModal() {
+  $newCatName.value = '';
+  selectedEmoji = PRESET_EMOJIS[0];
+  renderEmojiPicker();
+  $addCategoryModal.classList.remove('hidden');
+  $newCatName.focus();
+}
+
+function closeAddCategoryModal() {
+  $addCategoryModal.classList.add('hidden');
+}
+
+let selectedEmoji = PRESET_EMOJIS[0];
+
+function renderEmojiPicker() {
+  $emojiPicker.innerHTML = '';
+  for (const emoji of PRESET_EMOJIS) {
+    const btn = document.createElement('button');
+    btn.className = 'emoji-option' + (emoji === selectedEmoji ? ' selected' : '');
+    btn.textContent = emoji;
+    btn.type = 'button';
+    btn.addEventListener('click', () => {
+      selectedEmoji = emoji;
+      renderEmojiPicker();
+    });
+    $emojiPicker.appendChild(btn);
+  }
+  $newCatEmoji.textContent = selectedEmoji;
+}
+
+function addCategory() {
+  const name = $newCatName.value.trim();
+  if (!name) { $newCatName.focus(); return; }
+  const emoji = selectedEmoji;
+  const id = crypto.randomUUID();
+  const cat = { id, name, emoji, createdAt: Date.now() };
+  appCategories.push(cat);
+  chrome.storage.local.set({ categories: appCategories }, () => {
+    closeAddCategoryModal();
+    switchCategory(id);
+  });
+}
+
+function deleteCategory(catId) {
+  if (appCategories.length <= 1) return;
+  if (!confirm('Delete this habit and all its data? This cannot be undone.')) return;
+
+  appCategories = appCategories.filter(c => c.id !== catId);
+  for (const date of Object.keys(appDays)) {
+    delete appDays[date][catId];
+  }
+  delete appLongestStreaks[catId];
+
+  const nextId = appCategories[0].id;
+  chrome.storage.local.set({ days: appDays, categories: appCategories, longestStreaks: appLongestStreaks }, () => {
+    switchCategory(nextId);
+  });
+}
+
+// ─── Mark Today section ───────────────────────────────────────────────────────
+
+function updateMarkSection() {
+  const todayKey = getTodayKey();
+  const entry    = appDays[todayKey]?.[activeCatId];
+
   if (entry?.completed) {
     $markBtn.textContent = '✓ Logged today';
     $markBtn.disabled    = true;
     $markBtn.classList.add('logged');
     closeNotePanel(true);
+    renderEntryList(entry.entries || []);
+    $entryList.classList.remove('hidden');
+    $addNoteBtn.classList.remove('hidden');
   } else {
     $markBtn.textContent = 'Mark Today';
     $markBtn.disabled    = false;
     $markBtn.classList.remove('logged');
+    $entryList.classList.add('hidden');
+    $addNoteBtn.classList.add('hidden');
+    closeAddNotePanel(true);
   }
 }
 
-// ─── Note panel ───────────────────────────────────────────────────────────────
+// legacy alias used by some internal calls
+function updateMarkButton() { updateMarkSection(); }
+
+function renderEntryList(entries) {
+  $entryList.innerHTML = '';
+  if (!entries.length) {
+    const p = document.createElement('p');
+    p.className = 'entry-empty';
+    p.textContent = 'Logged with no notes.';
+    $entryList.appendChild(p);
+    return;
+  }
+  for (const entry of entries) {
+    const div = document.createElement('div');
+    div.className = 'entry-item';
+    const time = document.createElement('span');
+    time.className = 'entry-time';
+    time.textContent = entry.ts
+      ? new Date(entry.ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+      : '';
+    const text = document.createElement('span');
+    text.className = 'entry-text';
+    text.textContent = entry.text;
+    div.appendChild(time);
+    div.appendChild(text);
+    $entryList.appendChild(div);
+  }
+}
+
+// ─── Note panel (first-time mark) ────────────────────────────────────────────
 
 function openNotePanel() {
   $noteInputArea.classList.remove('hidden');
@@ -335,22 +368,58 @@ function closeNotePanel(immediate = false) {
   $noteInput.value = '';
 }
 
+// ─── Add Note panel (additional entries after marking) ───────────────────────
+
+function openAddNotePanel() {
+  $addNoteArea.classList.remove('hidden');
+  requestAnimationFrame(() => $addNoteArea.classList.add('visible'));
+  $addNoteInput.focus();
+}
+
+function closeAddNotePanel(immediate = false) {
+  $addNoteArea.classList.remove('visible');
+  if (immediate) $addNoteArea.classList.add('hidden');
+  else setTimeout(() => $addNoteArea.classList.add('hidden'), 220);
+  $addNoteInput.value = '';
+}
+
+function addEntryToday() {
+  const text = $addNoteInput.value.trim();
+  if (!text) return;
+  const todayKey = getTodayKey();
+  const catEntry = appDays[todayKey]?.[activeCatId];
+  if (!catEntry) return;
+  const newEntry = { text, ts: Date.now() };
+  catEntry.entries.push(newEntry);
+  chrome.storage.local.set({ days: appDays }, () => {
+    closeAddNotePanel();
+    renderEntryList(catEntry.entries);
+  });
+}
+
 // ─── Save today ───────────────────────────────────────────────────────────────
 
 function saveToday() {
   const todayKey = getTodayKey();
-  const note     = $noteInput.value.trim();
-  appDays[todayKey] = { completed: true, note };
+  const text     = $noteInput.value.trim();
+  if (!appDays[todayKey]) appDays[todayKey] = {};
+  appDays[todayKey][activeCatId] = {
+    completed: true,
+    entries: text ? [{ text, ts: Date.now() }] : [],
+  };
 
-  const longest = calcLongestStreak(appDays);
-  chrome.storage.local.set({ days: appDays, longestStreak: longest }, () => {
+  const slice   = getActiveDaysSlice();
+  const longest = calcLongestStreak(slice);
+  appLongestStreaks = { ...appLongestStreaks, [activeCatId]: longest };
+
+  chrome.storage.local.set({ days: appDays, longestStreaks: appLongestStreaks }, () => {
     closeNotePanel();
-    updateMarkButton();
+    updateMarkSection();
     updateStats();
     refreshCalendar();
     animateTodayCell();
-    showCelebration();   // 🎉 confetti + banner
-    refreshChallengeCode(); // update code if challenge panel is open
+    showCelebration();
+    refreshChallengeCode();
   });
 }
 
@@ -373,38 +442,20 @@ function animateTodayCell() {
 
 // ─── Celebration banner + confetti ────────────────────────────────────────────
 
-/**
- * Shows the celebration banner with a random quote, then auto-dismisses.
- * Simultaneously launches confetti and scrolls to the top so the quote is visible.
- */
 function showCelebration() {
   const quote = CELEBRATION_QUOTES[Math.floor(Math.random() * CELEBRATION_QUOTES.length)];
-  $celebrationBanner.textContent   = quote;
-  $celebrationBanner.ariaHidden    = 'false';
+  $celebrationBanner.textContent = quote;
+  $celebrationBanner.ariaHidden  = 'false';
   $celebrationBanner.classList.add('visible');
-
-  // Scroll the popup body to top so the celebration banner and quote are in view
   document.documentElement.scrollTop = 0;
   document.body.scrollTop = 0;
-
   launchConfetti();
-
   setTimeout(() => {
     $celebrationBanner.classList.remove('visible');
     setTimeout(() => { $celebrationBanner.ariaHidden = 'true'; }, 300);
   }, CELEBRATION_MS);
 }
 
-/**
- * Pure JS canvas confetti — no external libraries.
- *
- * Spawns PARTICLE_COUNT particles from the top of the popup, each with random
- * position, velocity, rotation, size, and colour. An rAF loop runs for
- * DURATION_MS then clears the canvas.
- *
- * Gravity (vy accumulates), slight horizontal drift, and opacity fade near the
- * bottom create a natural falling effect.
- */
 function launchConfetti() {
   const canvas = $confettiCanvas;
   const ctx    = canvas.getContext('2d');
@@ -418,7 +469,7 @@ function launchConfetti() {
 
   const particles = Array.from({ length: PARTICLE_COUNT }, () => ({
     x:             Math.random() * canvas.width,
-    y:             Math.random() * canvas.height * -0.3,  // start above viewport
+    y:             Math.random() * canvas.height * -0.3,
     vx:            (Math.random() - 0.5) * 3,
     vy:            Math.random() * 2 + 1,
     rotation:      Math.random() * Math.PI * 2,
@@ -430,21 +481,16 @@ function launchConfetti() {
   }));
 
   const startTime = Date.now();
-
   function frame() {
     const elapsed  = Date.now() - startTime;
-    const progress = elapsed / DURATION_MS; // 0 → 1
-
+    const progress = elapsed / DURATION_MS;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-
     particles.forEach(p => {
-      p.vy        += GRAVITY;
-      p.x         += p.vx;
-      p.y         += p.vy;
-      p.rotation  += p.rotationSpeed;
-      // Fade out in the last 40% of the animation
-      p.opacity    = progress < 0.6 ? 1 : 1 - ((progress - 0.6) / 0.4);
-
+      p.vy       += GRAVITY;
+      p.x        += p.vx;
+      p.y        += p.vy;
+      p.rotation += p.rotationSpeed;
+      p.opacity   = progress < 0.6 ? 1 : 1 - ((progress - 0.6) / 0.4);
       ctx.save();
       ctx.globalAlpha = Math.max(0, p.opacity);
       ctx.translate(p.x, p.y);
@@ -453,14 +499,9 @@ function launchConfetti() {
       ctx.fillRect(-p.width / 2, -p.height / 2, p.width, p.height);
       ctx.restore();
     });
-
-    if (elapsed < DURATION_MS) {
-      requestAnimationFrame(frame);
-    } else {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-    }
+    if (elapsed < DURATION_MS) requestAnimationFrame(frame);
+    else ctx.clearRect(0, 0, canvas.width, canvas.height);
   }
-
   requestAnimationFrame(frame);
 }
 
@@ -478,12 +519,10 @@ function renderMonthly() {
 
   $monthGrid.innerHTML = '';
 
-  // JS getDay(): 0=Sun…6=Sat. Shift so Mon=0 (Sun → 6).
   const firstDow    = new Date(viewYear, viewMonth, 1).getDay();
   const startOffset = firstDow === 0 ? 6 : firstDow - 1;
   const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
 
-  // Blank padding cells before day 1
   for (let i = 0; i < startOffset; i++) {
     const cell = document.createElement('div');
     cell.className = 'day-cell empty';
@@ -494,7 +533,7 @@ function renderMonthly() {
   for (let day = 1; day <= daysInMonth; day++) {
     const date     = new Date(viewYear, viewMonth, day);
     const key      = getDateKey(date);
-    const entry    = appDays[key];
+    const catEntry = appDays[key]?.[activeCatId];
     const isToday  = key === todayKey;
     const isPast   = date < today && !isToday;
     const isFuture = date > today;
@@ -512,23 +551,19 @@ function renderMonthly() {
     if (isFuture) {
       cell.classList.add('future');
       cell.appendChild(numEl);
-
-    } else if (entry?.completed) {
+    } else if (catEntry?.completed) {
       cell.classList.add('completed');
       if (isToday) cell.classList.add('today-completed');
       emojiEl.textContent = EMOJI_COMPLETE;
       cell.appendChild(numEl);
       cell.appendChild(emojiEl);
-      attachTooltip(cell, key, entry);
-
+      attachTooltip(cell, key);
     } else if (isPast) {
       cell.classList.add('missed');
       emojiEl.textContent = EMOJI_MISSED;
       cell.appendChild(numEl);
       cell.appendChild(emojiEl);
-
     } else {
-      // Today, not yet logged — pulsing ring
       cell.classList.add('today-unmarked');
       cell.appendChild(numEl);
     }
@@ -551,12 +586,9 @@ function renderYearly() {
   const today    = new Date();
   const todayKey = getTodayKey();
 
-  // Grid spans from the Monday of the week containing Jan 1
-  // to the Sunday of the week containing Dec 31
   const gridStart = getMondayOf(new Date(displayYear, 0, 1));
   const gridEnd   = getSundayOf(new Date(displayYear, 11, 31));
 
-  // Build all week columns
   const weeks  = [];
   const cursor = new Date(gridStart);
   while (cursor <= gridEnd) {
@@ -568,7 +600,6 @@ function renderYearly() {
     weeks.push(week);
   }
 
-  // Month label positions: first week index that contains a day of that month
   const monthFirstWeek = {};
   weeks.forEach((week, wi) => {
     week.forEach(day => {
@@ -595,7 +626,7 @@ function renderYearly() {
     week.forEach(day => {
       const cell     = document.createElement('div');
       const key      = getDateKey(day);
-      const entry    = appDays[key];
+      const catEntry = appDays[key]?.[activeCatId];
       const inYear   = day.getFullYear() === displayYear;
       const isFuture = day > today;
 
@@ -603,7 +634,7 @@ function renderYearly() {
       cell.setAttribute('aria-label', day.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }));
 
       if (inYear && !isFuture) {
-        if (entry?.completed) {
+        if (catEntry?.completed) {
           const s = getStreakAt(key);
           if (s <= STREAK_TIER_LOW)      cell.classList.add('completed-low');
           else if (s <= STREAK_TIER_MID) cell.classList.add('completed-mid');
@@ -611,7 +642,7 @@ function renderYearly() {
         } else {
           cell.classList.add('missed');
         }
-        attachTooltip(cell, key, entry);
+        attachTooltip(cell, key);
       }
 
       if (key === todayKey) cell.classList.add('today-cell');
@@ -622,7 +653,6 @@ function renderYearly() {
   });
 }
 
-// Returns the Monday of the week containing `date`
 function getMondayOf(date) {
   const d   = new Date(date);
   const dow = d.getDay();
@@ -630,7 +660,6 @@ function getMondayOf(date) {
   return d;
 }
 
-// Returns the Sunday of the week containing `date`
 function getSundayOf(date) {
   const d   = new Date(date);
   const dow = d.getDay();
@@ -638,25 +667,52 @@ function getSundayOf(date) {
   return d;
 }
 
+function getStreakAt(key) {
+  const slice  = getActiveDaysSlice();
+  const cursor = parseKey(key);
+  let streak = 0;
+  while (true) {
+    const k = getDateKey(cursor);
+    if (slice[k]?.completed) { streak++; cursor.setDate(cursor.getDate() - 1); }
+    else break;
+  }
+  return streak;
+}
+
+function formatMonthYear(year, month) {
+  return new Date(year, month).toLocaleDateString('en-US', {
+    month: 'long', year: 'numeric',
+  });
+}
+
 // ─── Tooltip ──────────────────────────────────────────────────────────────────
 
-function attachTooltip(cell, key, entry) {
+function attachTooltip(cell, key) {
   cell.addEventListener('mouseenter', e => {
     clearTimeout(tooltipTimeout);
-    tooltipTimeout = setTimeout(() => showTooltip(e, key, entry), TOOLTIP_DELAY_MS);
+    tooltipTimeout = setTimeout(() => showTooltip(e, key), TOOLTIP_DELAY_MS);
   });
   cell.addEventListener('mouseleave', () => { clearTimeout(tooltipTimeout); hideTooltip(); });
   cell.addEventListener('mousemove', positionTooltip);
 }
 
-function showTooltip(e, key, entry) {
-  const dateStr = parseKey(key).toLocaleDateString('en-US', {
+function showTooltip(e, key) {
+  const dateStr  = parseKey(key).toLocaleDateString('en-US', {
     weekday: 'short', month: 'short', day: 'numeric', year: 'numeric',
   });
-  const note = entry?.note?.trim() || '';
-  const noteHtml = entry?.completed
-    ? (note ? `<div class="tt-note">${escapeHtml(note)}</div>` : `<div class="tt-note">${EMOJI_COMPLETE} Logged</div>`)
-    : `<div class="tt-note" style="color:#555">Not logged</div>`;
+  const catEntry = appDays[key]?.[activeCatId];
+  const entries  = catEntry?.entries || [];
+
+  let noteHtml;
+  if (!catEntry?.completed) {
+    noteHtml = `<div class="tt-note" style="color:#555">Not logged</div>`;
+  } else if (!entries.length) {
+    noteHtml = `<div class="tt-note">${EMOJI_COMPLETE} Logged</div>`;
+  } else {
+    noteHtml = entries.map(en =>
+      `<div class="tt-note">${en.text ? escapeHtml(en.text) : EMOJI_COMPLETE + ' Logged'}</div>`
+    ).join('');
+  }
 
   $tooltip.innerHTML = `<div class="tt-date">${dateStr}</div>${noteHtml}`;
   $tooltip.classList.add('visible');
@@ -696,17 +752,6 @@ function switchView(view) {
 
 // ─── Share card (PNG export) ──────────────────────────────────────────────────
 
-/**
- * Draws an 800×400 share card on an offscreen canvas and returns it.
- * Respects the current theme so light-mode users get a light card.
- *
- * Layout:
- *   - Background matching current theme
- *   - App name top-left
- *   - Streak count (large, orange→pink gradient) + stat line
- *   - Full year heatmap grid
- *   - Footer tagline
- */
 function buildShareCanvas() {
   const W = 800, H = 400;
   const canvas = document.createElement('canvas');
@@ -715,58 +760,36 @@ function buildShareCanvas() {
   const ctx = canvas.getContext('2d');
 
   const isLight = appSettings.theme === 'light';
-
-  // Theme-aware colours
   const colours = isLight ? {
-    bgFrom:    '#f4f2ef',
-    bgTo:      '#fff3e8',
-    appName:   '#9a9490',
-    dayLabel:  '#9a9490',
-    stats:     '#6b6460',
-    footer:    '#c8c0b8',
-    cellEmpty: '#e8e2dc',
-    cellMissed:'#f8d8d4',
-    cellLow:   '#fdba74',
-    cellMid:   '#f97316',
-    cellHigh:  '#ea580c',
-    cellToday: '#f97316',
+    bgFrom: '#f4f2ef', bgTo: '#fff3e8', appName: '#9a9490', dayLabel: '#9a9490',
+    stats: '#6b6460', footer: '#c8c0b8', cellEmpty: '#e8e2dc', cellMissed: '#f8d8d4',
+    cellLow: '#fdba74', cellMid: '#f97316', cellHigh: '#ea580c', cellToday: '#f97316',
   } : {
-    bgFrom:    '#0f0f0f',
-    bgTo:      '#1a0800',
-    appName:   '#555555',
-    dayLabel:  '#666666',
-    stats:     '#888888',
-    footer:    '#333333',
-    cellEmpty: '#1c1c1e',
-    cellMissed:'#1c1416',
-    cellLow:   '#7c2d00',
-    cellMid:   '#c2410c',
-    cellHigh:  '#f97316',
-    cellToday: '#f97316',
+    bgFrom: '#0f0f0f', bgTo: '#1a0800', appName: '#555555', dayLabel: '#666666',
+    stats: '#888888', footer: '#333333', cellEmpty: '#1c1c1e', cellMissed: '#1c1416',
+    cellLow: '#7c2d00', cellMid: '#c2410c', cellHigh: '#f97316', cellToday: '#f97316',
   };
 
-  // Background
   const bg = ctx.createLinearGradient(0, 0, W, H);
   bg.addColorStop(0, colours.bgFrom);
   bg.addColorStop(1, colours.bgTo);
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, W, H);
 
-  // Subtle radial glow
   const glow = ctx.createRadialGradient(W / 2, 0, 0, W / 2, 0, H * 0.8);
   glow.addColorStop(0, 'rgba(249,115,22,0.08)');
   glow.addColorStop(1, 'rgba(0,0,0,0)');
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, W, H);
 
-  // App name
+  const cat = getActiveCategory();
   ctx.fillStyle = colours.appName;
   ctx.font = '500 13px system-ui, sans-serif';
   ctx.letterSpacing = '3px';
   ctx.fillText('STREAK', 40, 46);
 
-  // Streak count — orange→pink gradient text
-  const streakCount = String(calcCurrentStreak(appDays));
+  const slice = getActiveDaysSlice();
+  const streakCount = String(calcCurrentStreak(slice));
   ctx.font = 'bold 72px system-ui, sans-serif';
   const grad = ctx.createLinearGradient(40, 0, 220, 0);
   grad.addColorStop(0, '#f97316');
@@ -774,55 +797,50 @@ function buildShareCanvas() {
   ctx.fillStyle = grad;
   ctx.fillText(streakCount, 40, 126);
 
-  // "day streak" label
   ctx.fillStyle = colours.dayLabel;
   ctx.font = '500 15px system-ui, sans-serif';
   ctx.letterSpacing = '1px';
   ctx.fillText('day streak', 40, 152);
 
-  // Stats line
-  const longest = calcLongestStreak(appDays);
-  const total   = calcTotal(appDays);
   ctx.fillStyle = colours.stats;
   ctx.font = '400 13px system-ui, sans-serif';
   ctx.letterSpacing = '0px';
-  ctx.fillText(`Longest: ${longest} days   ·   Total: ${total} days`, 40, 180);
+  const longest = calcLongestStreak(slice);
+  const total   = calcTotal(slice);
+  ctx.fillText(`${cat.emoji} ${cat.name}   ·   Longest: ${longest} days   ·   Total: ${total} days`, 40, 180);
 
-  // Heatmap — replicate yearly grid logic
   const displayYear = new Date().getFullYear();
   const today       = new Date();
   const todayKey    = getTodayKey();
   const gridStart   = getMondayOf(new Date(displayYear, 0, 1));
   const gridEnd     = getSundayOf(new Date(displayYear, 11, 31));
-
   const CELL = 8, GAP = 2, COLS_X = 40, ROWS_Y = 210;
   const cursor = new Date(gridStart);
   let col = 0;
 
   while (cursor <= gridEnd) {
     for (let row = 0; row < 7; row++) {
-      const day    = new Date(cursor);
+      const day = new Date(cursor);
       day.setDate(day.getDate() + row);
-
       const key      = getDateKey(day);
-      const entry    = appDays[key];
+      const catEntry = appDays[key]?.[activeCatId];
       const inYear   = day.getFullYear() === displayYear;
       const isFuture = day > today;
 
       let colour = colours.cellEmpty;
       if (inYear && !isFuture) {
-        if (entry?.completed) {
+        if (catEntry?.completed) {
           const s = getStreakAt(key);
-          colour  = s <= STREAK_TIER_LOW ? colours.cellLow
-                  : s <= STREAK_TIER_MID ? colours.cellMid
-                  : colours.cellHigh;
+          colour = s <= STREAK_TIER_LOW ? colours.cellLow
+                 : s <= STREAK_TIER_MID ? colours.cellMid
+                 : colours.cellHigh;
         } else {
           colour = colours.cellMissed;
         }
       }
       if (key === todayKey) colour = colours.cellToday;
 
-      ctx.fillStyle    = colour;
+      ctx.fillStyle = colour;
       ctx.beginPath();
       ctx.roundRect(COLS_X + col * (CELL + GAP), ROWS_Y + row * (CELL + GAP), CELL, CELL, 2);
       ctx.fill();
@@ -831,11 +849,10 @@ function buildShareCanvas() {
     col++;
   }
 
-  // Footer
   ctx.fillStyle = colours.footer;
   ctx.font = '400 12px system-ui, sans-serif';
   ctx.letterSpacing = '0.5px';
-  ctx.fillText('Keep reading. Keep growing.  — streak', 40, H - 24);
+  ctx.fillText('Keep going. — streak', 40, H - 24);
 
   return canvas;
 }
@@ -861,92 +878,80 @@ function copyShareCard() {
         $shareCopyBtn.textContent = '✓ Copied!';
         setTimeout(() => { $shareCopyBtn.textContent = orig; }, 2000);
       })
-      .catch(() => {
-        // Clipboard API may be blocked in some contexts — fall back to download
-        downloadShareCard();
-      });
+      .catch(() => { downloadShareCard(); });
   }, 'image/png');
 }
 
 // ─── Friend challenge ─────────────────────────────────────────────────────────
 
-/**
- * Encodes last 90 days as a compact bit string ("1" = completed, "0" = missed/unknown).
- * Included in the challenge payload so the recipient can draw a mini heat strip.
- */
-function encodeLast90Days(days) {
+function encodeLast90Days(slice) {
   let bits = '';
   const cursor = new Date();
-  cursor.setDate(cursor.getDate() - 89); // start 89 days ago
+  cursor.setDate(cursor.getDate() - 89);
   for (let i = 0; i < 90; i++) {
-    bits += days[getDateKey(cursor)]?.completed ? '1' : '0';
+    bits += slice[getDateKey(cursor)]?.completed ? '1' : '0';
     cursor.setDate(cursor.getDate() + 1);
   }
   return bits;
 }
 
-/**
- * Generates a Base64-encoded challenge code containing public streak stats.
- * Notes are deliberately excluded for privacy.
- */
-function generateChallengeCode() {
-  const payload = {
-    v:       2,                                  // payload version
-    name:    appSettings.name?.trim() || 'Friend',
-    streak:  calcCurrentStreak(appDays),
-    longest: calcLongestStreak(appDays),
-    total:   calcTotal(appDays),
-    heat:    encodeLast90Days(appDays),
-    ts:      Date.now(),
-  };
-  // btoa produces standard Base64; strip padding for a cleaner-looking code
-  return btoa(JSON.stringify(payload)).replace(/=/g, '');
+// Unicode-safe base64: encode via UTF-8 bytes so emoji in names never break btoa.
+function toBase64(str) {
+  return btoa(String.fromCharCode(...new TextEncoder().encode(str)));
+}
+function fromBase64(b64) {
+  return new TextDecoder().decode(Uint8Array.from(atob(b64), c => c.charCodeAt(0)));
 }
 
-/**
- * Decodes a challenge code. Returns the payload object, or null if invalid.
- * Also returns null if the code is older than CHALLENGE_MAX_AGE_MS (7 days).
- */
+function generateChallengeCode() {
+  const slice   = getActiveDaysSlice();
+  const cat     = getActiveCategory();
+  const payload = {
+    v:            3,
+    name:         appSettings.name?.trim() || 'Friend',
+    categoryName: cat.emoji + ' ' + cat.name,
+    streak:       calcCurrentStreak(slice),
+    longest:      calcLongestStreak(slice),
+    total:        calcTotal(slice),
+    heat:         encodeLast90Days(slice),
+    ts:           Date.now(),
+  };
+  return toBase64(JSON.stringify(payload)).replace(/=/g, '');
+}
+
 function decodeChallengeCode(code) {
   try {
-    // Re-add stripped padding before decoding
-    const padded  = code + '=='.slice(0, (4 - (code.length % 4)) % 4);
-    const payload = JSON.parse(atob(padded));
-    if (!payload?.v || !payload?.heat) return null;
+    const padded = code + '=='.slice(0, (4 - (code.length % 4)) % 4);
+    // Try new UTF-8 decode first, fall back to plain atob for old v2 codes
+    let json;
+    try { json = fromBase64(padded); }
+    catch { json = atob(padded); }
+    const payload = JSON.parse(json);
+    if (!payload?.heat) return null;
+    if ((payload.v || 2) < 2) return null;
+    if (!payload.categoryName) payload.categoryName = 'Reading 📚';
     if (Date.now() - payload.ts > CHALLENGE_MAX_AGE_MS) return { expired: true, name: payload.name };
     return payload;
   } catch {
-    return null; // malformed Base64 or JSON
+    return null;
   }
 }
 
-/**
- * Regenerates and displays the challenge code in the "Your Code" tab.
- * Called on init (if challenge panel is open) and after saving today.
- */
 function refreshChallengeCode() {
   $generatedCode.value = generateChallengeCode();
 }
 
-/**
- * Renders the side-by-side comparison panel from a decoded friend payload.
- *
- * Layout:
- *   [Your name]   vs   [Friend name]
- *   🔥 12 days         🔥 8 days
- *   Longest: 29        Longest: 15
- *   [heat strip]       [heat strip]
- */
 function renderComparison(friend) {
-  const myStreak  = calcCurrentStreak(appDays);
-  const myLongest = calcLongestStreak(appDays);
-  const myHeat    = encodeLast90Days(appDays);
+  const slice     = getActiveDaysSlice();
+  const myStreak  = calcCurrentStreak(slice);
+  const myLongest = calcLongestStreak(slice);
+  const myHeat    = encodeLast90Days(slice);
   const myName    = appSettings.name?.trim() || 'You';
+  const cat       = getActiveCategory();
 
   function heatStrip(bits) {
     const wrap = document.createElement('div');
     wrap.className = 'heat-strip';
-    // Show last 30 days for compactness
     const recent = bits.slice(-30);
     for (const bit of recent) {
       const dot = document.createElement('div');
@@ -959,11 +964,12 @@ function renderComparison(friend) {
   const grid = document.createElement('div');
   grid.className = 'comparison-grid';
 
-  function col(name, streak, longest, heat, alignRight) {
+  function col(name, streak, longest, heat, catLabel, alignRight) {
     const c = document.createElement('div');
     c.className = 'comparison-col' + (alignRight ? ' right' : '');
     c.innerHTML = `
       <div class="comparison-name">${escapeHtml(name)}</div>
+      <div class="comparison-cat-label">${escapeHtml(catLabel)}</div>
       <div class="comparison-streak">🔥 ${streak}</div>
       <div class="comparison-meta">Longest: ${longest} days</div>
     `;
@@ -975,24 +981,99 @@ function renderComparison(friend) {
   vs.className   = 'comparison-vs';
   vs.textContent = 'vs';
 
-  grid.appendChild(col(myName,      myStreak,      myLongest,      myHeat,       false));
+  grid.appendChild(col(myName,      myStreak,      myLongest,      myHeat,        cat.emoji + ' ' + cat.name, false));
   grid.appendChild(vs);
-  grid.appendChild(col(friend.name, friend.streak, friend.longest, friend.heat,  true));
+  grid.appendChild(col(friend.name, friend.streak, friend.longest, friend.heat,   friend.categoryName || '', true));
 
   $challengeResult.innerHTML = '';
   $challengeResult.appendChild(grid);
+
+  const isAlreadySaved = appFriends.some(f => f.ts === friend.ts);
+  const canSaveMore    = appFriends.length < 3;
+  if (!isAlreadySaved && canSaveMore) {
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'save-friend-btn';
+    saveBtn.textContent = '💾 Save this friend';
+    saveBtn.addEventListener('click', () => {
+      saveFriend(friend);
+      saveBtn.textContent = '✓ Saved!';
+      saveBtn.disabled = true;
+    });
+    $challengeResult.appendChild(saveBtn);
+  } else if (!isAlreadySaved && !canSaveMore) {
+    const note = document.createElement('p');
+    note.className = 'challenge-hint';
+    note.textContent = 'Remove a saved friend to save this one (max 3).';
+    $challengeResult.appendChild(note);
+  }
+}
+
+// ─── Persistent friends (up to 3) ────────────────────────────────────────────
+
+function saveFriend(payload) {
+  if (appFriends.length >= 3) {
+    alert('You can save up to 3 friends. Remove one to add another.');
+    return;
+  }
+  // Avoid exact duplicates (same ts)
+  if (appFriends.some(f => f.ts === payload.ts)) return;
+  appFriends.push({ ...payload, savedAt: Date.now() });
+  chrome.storage.local.set({ friends: appFriends }, renderSavedFriends);
+}
+
+function clearFriend(index) {
+  appFriends.splice(index, 1);
+  chrome.storage.local.set({ friends: appFriends }, () => {
+    renderSavedFriends();
+    $challengeResult.innerHTML = '';
+  });
+}
+
+function renderSavedFriends() {
+  if (!appFriends.length) {
+    $savedFriendsPanel.classList.add('hidden');
+    $savedFriendsPanel.innerHTML = '';
+    return;
+  }
+
+  $savedFriendsPanel.classList.remove('hidden');
+  $savedFriendsPanel.innerHTML = '';
+
+  for (let i = 0; i < appFriends.length; i++) {
+    const f = appFriends[i];
+    const daysAgo = Math.floor((Date.now() - f.savedAt) / 86_400_000);
+    const agoText = daysAgo === 0 ? 'today' : daysAgo === 1 ? '1 day ago' : `${daysAgo} days ago`;
+
+    const card = document.createElement('div');
+    card.className = 'saved-friend-card';
+    card.innerHTML = `
+      <div class="saved-friend-header">
+        <span class="saved-friend-name">${escapeHtml(f.name)}</span>
+        <span class="saved-friend-streak">🔥 ${f.streak}</span>
+        <span class="saved-friend-cat">${escapeHtml(f.categoryName || '')}</span>
+        <span class="saved-friend-ago">${agoText}</span>
+        <button class="saved-friend-clear" data-idx="${i}" aria-label="Remove friend">✕</button>
+      </div>
+    `;
+    card.querySelector('.saved-friend-clear').addEventListener('click', () => clearFriend(i));
+    // Click card to load comparison
+    card.addEventListener('click', e => {
+      if (e.target.classList.contains('saved-friend-clear')) return;
+      renderComparison(f);
+      // Switch to Enter Code tab so comparison is visible
+      $tabEnterCode.click();
+    });
+    $savedFriendsPanel.appendChild(card);
+  }
 }
 
 // ─── Event listeners ──────────────────────────────────────────────────────────
 
-// Theme toggle
 $themeToggle.addEventListener('click', toggleTheme);
 
-// View toggle
 $btnMonthly.addEventListener('click', () => switchView('monthly'));
 $btnYearly.addEventListener('click',  () => switchView('yearly'));
 
-// Month navigation
 $prevMonth.addEventListener('click', () => {
   viewMonth--;
   if (viewMonth < 0) { viewMonth = 11; viewYear--; }
@@ -1006,7 +1087,6 @@ $nextMonth.addEventListener('click', () => {
   renderMonthly();
 });
 
-// Year navigation
 $prevYear.addEventListener('click', () => { viewYearOffset--; renderYearly(); });
 $nextYear.addEventListener('click', () => {
   if (viewYearOffset >= 0) return;
@@ -1014,9 +1094,8 @@ $nextYear.addEventListener('click', () => {
   renderYearly();
 });
 
-// Mark Today
 $markBtn.addEventListener('click', () => {
-  if (appDays[getTodayKey()]?.completed) return;
+  if (appDays[getTodayKey()]?.[activeCatId]?.completed) return;
   openNotePanel();
   $markBtn.textContent = 'Adding note…';
   $markBtn.disabled    = true;
@@ -1025,19 +1104,22 @@ $noteCancel.addEventListener('click',  () => { closeNotePanel(); updateMarkButto
 $noteConfirm.addEventListener('click', saveToday);
 $noteInput.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) saveToday(); });
 
-// Share buttons
+$addNoteBtn.addEventListener('click', openAddNotePanel);
+$addNoteCancel.addEventListener('click',  () => closeAddNotePanel());
+$addNoteConfirm.addEventListener('click', addEntryToday);
+$addNoteInput.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) addEntryToday(); });
+
 $shareDownloadBtn.addEventListener('click', downloadShareCard);
 $shareCopyBtn.addEventListener('click', copyShareCard);
 
-// Challenge toggle (expand/collapse)
 $challengeToggle.addEventListener('click', () => {
   const isOpen = $challengeSection.classList.toggle('open');
   $challengeBody.classList.toggle('hidden', !isOpen);
   $challengeToggle.setAttribute('aria-expanded', isOpen);
+  // Code is always refreshed on open so it's never stale
   if (isOpen) refreshChallengeCode();
 });
 
-// Challenge tabs
 [$tabYourCode, $tabEnterCode].forEach(tab => {
   tab.addEventListener('click', () => {
     const isYours = tab === $tabYourCode;
@@ -1048,14 +1130,12 @@ $challengeToggle.addEventListener('click', () => {
   });
 });
 
-// Challenge: update code when name changes
 $userName.addEventListener('input', () => {
   appSettings.name = $userName.value.trim();
   saveSettings();
   refreshChallengeCode();
 });
 
-// Challenge: copy code
 $copyCodeBtn.addEventListener('click', () => {
   navigator.clipboard.writeText($generatedCode.value).then(() => {
     const orig = $copyCodeBtn.textContent;
@@ -1064,15 +1144,12 @@ $copyCodeBtn.addEventListener('click', () => {
   });
 });
 
-// Challenge: compare with friend's code
 $compareBtn.addEventListener('click', () => {
-  const code    = $friendCodeInput.value.trim();
+  const code = $friendCodeInput.value.trim();
   $challengeResult.innerHTML = '';
-
   if (!code) return;
 
   const payload = decodeChallengeCode(code);
-
   if (!payload) {
     $challengeResult.innerHTML = '<div class="challenge-error">⚠️ Invalid code. Ask your friend to generate a fresh one.</div>';
     return;
@@ -1081,35 +1158,67 @@ $compareBtn.addEventListener('click', () => {
     $challengeResult.innerHTML = `<div class="challenge-error">⏰ This code from <strong>${escapeHtml(payload.name)}</strong> has expired (codes last 7 days). Ask them to share a new one.</div>`;
     return;
   }
-
   renderComparison(payload);
 });
 
+$addCatConfirm.addEventListener('click', addCategory);
+$addCatCancel.addEventListener('click', closeAddCategoryModal);
+$newCatName.addEventListener('keydown', e => { if (e.key === 'Enter') addCategory(); if (e.key === 'Escape') closeAddCategoryModal(); });
+$addCategoryModal.addEventListener('click', e => { if (e.target === $addCategoryModal) closeAddCategoryModal(); });
+
 // ─── Initialisation ───────────────────────────────────────────────────────────
 
-/**
- * Entry point — reads storage, applies theme, then renders everything.
- * All rendering waits for this callback so the popup is never in a partial state.
- */
-chrome.storage.local.get(['days', 'longestStreak', 'settings'], (result) => {
-  appDays = result.days || {};
+chrome.storage.local.get(['days', 'longestStreak', 'longestStreaks', 'categories', 'settings', 'friends', 'friend'], (result) => {
+  let days          = result.days || {};
+  let categories    = result.categories;
+  let longestStreaks = result.longestStreaks || {};
 
-  // Restore settings (theme + display name)
+  // Migrate v2 flat schema → v3 nested schema
+  if (Object.keys(days).length && needsMigration(days)) {
+    const migrated = migrateData(result);
+    days           = migrated.days;
+    categories     = migrated.categories;
+    longestStreaks  = migrated.longestStreaks;
+  }
+
+  appDays          = days;
+  appCategories    = categories || [DEFAULT_CATEGORY];
+  appLongestStreaks = longestStreaks;
+
+  // Migrate old single 'friend' → new 'friends' array
+  if (result.friends) {
+    appFriends = result.friends.filter(Boolean);
+  } else if (result.friend) {
+    appFriends = [result.friend];
+    chrome.storage.local.set({ friends: appFriends });
+    chrome.storage.local.remove('friend');
+  }
+
   if (result.settings) {
     appSettings = { ...appSettings, ...result.settings };
   }
   applyTheme(appSettings.theme || 'dark');
 
-  // Pre-fill name field if saved
+  const savedCatId = appSettings.activeCategoryId;
+  if (savedCatId && appCategories.find(c => c.id === savedCatId)) {
+    activeCatId = savedCatId;
+  } else {
+    activeCatId = appCategories[0].id;
+  }
+
   if (appSettings.name) $userName.value = appSettings.name;
 
-  // Silently fix longestStreak if it's stale (e.g. missed a rollover)
-  const computed = calcLongestStreak(appDays);
-  const stored   = result.longestStreak || 0;
-  if (computed > stored) chrome.storage.local.set({ longestStreak: computed });
+  selectedEmoji = PRESET_EMOJIS[0];
 
   renderQuote();
+  renderCategoryTabs();
   updateStats();
-  updateMarkButton();
+  updateMarkSection();
   switchView('monthly');
+
+  // Always generate code so it's ready the moment the panel opens
+  refreshChallengeCode();
+
+  // Show saved friends
+  renderSavedFriends();
 });

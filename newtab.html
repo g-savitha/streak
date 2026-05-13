@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>streak</title>
+  <link rel="stylesheet" href="newtab.css">
+</head>
+<body>
+
+  <div class="top-bar">
+    <div class="app-name">streak</div>
+    <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme">
+      <span id="themeIcon">🌙</span>
+    </button>
+  </div>
+
+  <div class="main">
+    <!-- Category pills (shown when multiple habits exist) -->
+    <div class="nt-category-tabs" id="ntCategoryTabs"></div>
+
+    <!-- Big streak number for selected category -->
+    <div class="streak-fire" aria-hidden="true">🔥</div>
+    <div class="streak-count" id="streakCount">0</div>
+    <div class="streak-label">day streak</div>
+
+    <div class="category-line">
+      <span class="cat-name" id="catName"></span>
+      <span class="dot">·</span>
+      <span id="statLongest"></span>
+      <span class="dot">·</span>
+      <span id="statTotal"></span>
+    </div>
+
+    <!-- All habits summary row -->
+    <div class="all-habits-row" id="allHabitsRow"></div>
+
+    <div class="divider"></div>
+
+    <div class="quote-text" id="quoteText"></div>
+    <div class="today-date" id="todayDate"></div>
+
+    <!-- Friends strips (up to 3) -->
+    <div class="friends-area" id="friendsArea"></div>
+  </div>
+
+  <div class="bottom-bar">
+    <span class="open-popup-link">Click the 🔥 extension icon to log today</span>
+  </div>
+
+  <script src="shared.js"></script>
+  <script src="newtab.js"></script>
+</body>
+</html>

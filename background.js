@@ -1,46 +1,31 @@
 /**
- * background.js — Streak Extension Service Worker
+ * background.js — Streak Extension v3 Service Worker
  *
  * Responsibilities:
  *   1. Schedule two daily alarms on install/startup:
- *        • "daily-reminder"   → 9:00 PM  — notify user if today isn't logged yet
- *        • "midnight-rollover" → 12:01 AM — seal yesterday as missed, recompute longest streak
+ *        • "daily-reminder"    → 9:00 PM  — notify if active category not logged
+ *        • "midnight-rollover" → 12:01 AM — seal yesterday as missed per category
  *   2. Handle those alarms when they fire.
  *
- * Why a service worker (not a persistent background page)?
- *   Manifest V3 requires service workers. They can be terminated by Chrome at
- *   any time and are restarted on events, so all state lives in chrome.storage.
- *
- * Storage schema (chrome.storage.local):
+ * Storage schema (v3):
  *   {
- *     days: {
- *       "YYYY-MM-DD": { completed: boolean, note: string }
- *     },
- *     longestStreak: number,   // cached to avoid recomputing on every popup open
- *     settings: {
- *       name: string,          // display name for challenge codes
- *       theme: string          // 'dark' | 'light'
- *     }
+ *     categories: [{ id, name, emoji, createdAt }],
+ *     days: { "YYYY-MM-DD": { [catId]: { completed: boolean, entries: [] } } },
+ *     longestStreaks: { [catId]: number },
+ *     settings: { name, theme, activeCategoryId }
  *   }
  */
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-
-const ALARM_REMINDER  = 'daily-reminder';
 const ALARM_ROLLOVER  = 'midnight-rollover';
-const REMINDER_HOUR   = 21;   // 9 PM local time
 const ROLLOVER_HOUR   = 0;
-const ROLLOVER_MINUTE = 1;    // 12:01 AM — one minute after midnight to be safe
+const ROLLOVER_MINUTE = 1;
 const MS_PER_DAY      = 86_400_000;
 const MINUTES_PER_DAY = 1440;
 
+const DEFAULT_CAT_ID = 'reading';
+
 // ─── Date utilities ───────────────────────────────────────────────────────────
 
-/**
- * Returns a "YYYY-MM-DD" key for a given Date in local time.
- * Always use this instead of toISOString(), which returns UTC and can be
- * off by one day near midnight depending on the user's timezone.
- */
 function getDateKey(date) {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
@@ -48,228 +33,132 @@ function getDateKey(date) {
   return `${y}-${m}-${d}`;
 }
 
-/** Shorthand for today's key. */
-function getTodayKey() {
-  return getDateKey(new Date());
-}
+function getTodayKey() { return getDateKey(new Date()); }
 
-// ─── Streak calculations ──────────────────────────────────────────────────────
+// ─── Streak calculation (operates on a flat per-category slice) ───────────────
 
-/**
- * Counts consecutive completed days ending at today (or yesterday if today
- * hasn't been logged yet). This is the "live" current streak shown in the UI.
- *
- * Logic:
- *   - If today is completed, count backwards from today.
- *   - If today is NOT completed, count backwards from yesterday (streak is
- *     still alive — she has until midnight).
- *   - Stop at the first gap or missed day.
- */
 function calcCurrentStreak(days) {
   const todayKey = getTodayKey();
-  const cursor   = new Date(); // mutated in loop — start from today
-
-  // If today hasn't been logged, treat yesterday as the latest possible day
-  if (!days[todayKey]?.completed) {
-    cursor.setDate(cursor.getDate() - 1);
-  }
+  const cursor   = new Date();
+  if (!days[todayKey]?.completed) cursor.setDate(cursor.getDate() - 1);
 
   let streak = 0;
   while (true) {
     const key = getDateKey(cursor);
-    if (days[key]?.completed) {
-      streak++;
-      cursor.setDate(cursor.getDate() - 1);
-    } else {
-      break;
-    }
+    if (days[key]?.completed) { streak++; cursor.setDate(cursor.getDate() - 1); }
+    else break;
   }
   return streak;
 }
 
-/**
- * Finds the longest consecutive completed-day run across all stored history.
- * Called after the midnight rollover writes a missed-day entry, so longestStreak
- * in storage always reflects the true all-time best.
- *
- * Uses `new Date(key + 'T00:00:00')` (local midnight) rather than
- * `new Date(key)` to avoid UTC-offset issues when computing day diffs.
- */
 function calcLongestStreak(days) {
-  // Only consider completed days; sort chronologically
-  const completedKeys = Object.keys(days)
-    .filter(key => days[key].completed)
-    .sort(); // ISO format sorts lexicographically = chronologically
-
-  let longest = 0;
-  let current = 0;
-  let prevDate = null;
-
-  for (const key of completedKeys) {
+  const keys = Object.keys(days).filter(k => days[k].completed).sort();
+  let longest = 0, current = 0, prevDate = null;
+  for (const key of keys) {
     const date = new Date(key + 'T00:00:00');
-
-    if (prevDate !== null) {
-      const daysDiff = Math.round((date - prevDate) / MS_PER_DAY);
-      current = daysDiff === 1 ? current + 1 : 1; // consecutive → extend; gap → reset
-    } else {
-      current = 1; // first completed day
-    }
-
+    const diff = prevDate ? Math.round((date - prevDate) / MS_PER_DAY) : null;
+    current    = diff === 1 ? current + 1 : 1;
     if (current > longest) longest = current;
-    prevDate = date;
+    prevDate   = date;
   }
-
   return longest;
+}
+
+// Builds a { "YYYY-MM-DD": { completed, entries } } slice for a single category.
+function buildCategorySlice(days, catId) {
+  const slice = {};
+  for (const [date, cats] of Object.entries(days)) {
+    if (cats[catId]) slice[date] = cats[catId];
+  }
+  return slice;
+}
+
+// ─── Schema detection ─────────────────────────────────────────────────────────
+
+function isOldSchema(days) {
+  const vals = Object.values(days);
+  if (!vals.length) return false;
+  return typeof vals[0].completed === 'boolean';
 }
 
 // ─── Alarm scheduling ─────────────────────────────────────────────────────────
 
-/**
- * Returns the Unix timestamp (ms) for the next occurrence of a given
- * local-time hour:minute. If that time has already passed today, it
- * returns tomorrow's occurrence.
- *
- * Chrome alarm `when` values must be in the future; this ensures we never
- * schedule an alarm in the past.
- */
 function getNextAlarmTime(hour, minute = 0) {
   const now  = new Date();
   const next = new Date();
   next.setHours(hour, minute, 0, 0);
-
-  if (next <= now) {
-    next.setDate(next.getDate() + 1); // already passed today → use tomorrow
-  }
-
+  if (next <= now) next.setDate(next.getDate() + 1);
   return next.getTime();
 }
 
-/**
- * Creates the two daily alarms if they don't already exist.
- * Called on install AND on startup, because Chrome may clear alarms
- * when the extension is updated or Chrome is restarted.
- *
- * We check existence before creating to avoid resetting the schedule
- * on every Chrome startup if the alarm is already set.
- */
+// Notification is now triggered from newtab.js on tab open (once per day).
+// Background only handles the midnight rollover alarm.
+
 function scheduleAlarms() {
   chrome.alarms.getAll((existingAlarms) => {
     const existingNames = new Set(existingAlarms.map(a => a.name));
-
-    if (!existingNames.has(ALARM_REMINDER)) {
-      chrome.alarms.create(ALARM_REMINDER, {
-        when: getNextAlarmTime(REMINDER_HOUR),
-        periodInMinutes: MINUTES_PER_DAY,
-      });
-      console.log(`[Streak] Scheduled alarm: ${ALARM_REMINDER} at ${REMINDER_HOUR}:00`);
-    }
 
     if (!existingNames.has(ALARM_ROLLOVER)) {
       chrome.alarms.create(ALARM_ROLLOVER, {
         when: getNextAlarmTime(ROLLOVER_HOUR, ROLLOVER_MINUTE),
         periodInMinutes: MINUTES_PER_DAY,
       });
-      console.log(`[Streak] Scheduled alarm: ${ALARM_ROLLOVER} at ${ROLLOVER_HOUR}:${String(ROLLOVER_MINUTE).padStart(2,'0')}`);
+    }
+
+    // Clean up old reminder alarm if it still exists from v2
+    if (existingNames.has('daily-reminder')) {
+      chrome.alarms.clear('daily-reminder');
     }
   });
 }
 
 // ─── Lifecycle listeners ──────────────────────────────────────────────────────
 
-// First install or extension update
-chrome.runtime.onInstalled.addListener((details) => {
-  console.log(`[Streak] onInstalled reason=${details.reason}`);
-  scheduleAlarms();
-});
-
-// Browser restart — Chrome may have cleared alarms
-chrome.runtime.onStartup.addListener(() => {
-  console.log('[Streak] onStartup — verifying alarms');
-  scheduleAlarms();
-});
+chrome.runtime.onInstalled.addListener(() => { scheduleAlarms(); });
+chrome.runtime.onStartup.addListener(()   => { scheduleAlarms(); });
 
 // ─── Alarm handler ────────────────────────────────────────────────────────────
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  console.log(`[Streak] Alarm fired: ${alarm.name}`);
-
-  if (alarm.name === ALARM_REMINDER) {
-    handleReminderAlarm();
-  } else if (alarm.name === ALARM_ROLLOVER) {
-    handleRolloverAlarm();
-  }
+  if (alarm.name === ALARM_ROLLOVER) handleRolloverAlarm();
 });
 
-/**
- * Motivational reminder messages — rotated by day-of-month so it feels fresh.
- * Chosen to feel encouraging rather than nagging.
- */
-const REMINDER_MESSAGES = [
-  "There's still time — even 10 minutes of reading counts. You've got this! 🔥",
-  "Your streak is waiting. A few pages before midnight keeps it alive 💪",
-  "Don't let today slip away. You're one habit away from a new high streak!",
-  "Hey! The best time to read is right now. Your future self will thank you 📚",
-  "Small steps, big dreams. Log today's reading before midnight 🌙",
-  "You've built something beautiful. Don't let it end tonight — go read! ✨",
-];
-
-/**
- * 9 PM reminder: send a notification only if today hasn't been logged.
- * If she already logged, stay silent — no need to nag.
- */
-function handleReminderAlarm() {
-  chrome.storage.local.get(['days'], (result) => {
-    const days     = result.days || {};
-    const todayKey = getTodayKey();
-
-    if (days[todayKey]?.completed) {
-      console.log('[Streak] Reminder skipped — today already logged');
-      return;
-    }
-
-    // Rotate through messages by day-of-month so it feels fresh each day
-    const msg = REMINDER_MESSAGES[new Date().getDate() % REMINDER_MESSAGES.length];
-
-    chrome.notifications.create(ALARM_REMINDER, {
-      type:     'basic',
-      iconUrl:  'icons/icon128.png',
-      title:    "Don't break your streak! 🔥",
-      message:  msg,
-      priority: 2,
-    });
-
-    console.log('[Streak] Reminder notification sent');
-  });
-}
-
-/**
- * Midnight rollover: run at 12:01 AM.
- *   1. If yesterday has no entry at all, write { completed: false, note: '' }
- *      so the calendar correctly shows it as a missed day.
- *   2. Recompute and persist longestStreak in case it changed.
- *
- * We do NOT touch today's entry here — the user may still log today.
- */
 function handleRolloverAlarm() {
-  chrome.storage.local.get(['days', 'longestStreak'], (result) => {
+  chrome.storage.local.get(['days', 'categories', 'longestStreaks', 'longestStreak'], (result) => {
     const days = result.days || {};
 
-    // "Yesterday" from the perspective of 12:01 AM is the day that just ended
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
     const yesterdayKey = getDateKey(yesterday);
 
-    if (days[yesterdayKey] === undefined) {
-      days[yesterdayKey] = { completed: false, note: '' };
-      console.log(`[Streak] Marked ${yesterdayKey} as missed`);
+    // Handle old schema gracefully (migration hasn't run yet — user hasn't opened popup)
+    if (isOldSchema(days)) {
+      if (days[yesterdayKey] === undefined) {
+        days[yesterdayKey] = { completed: false, entries: [] };
+      }
+      const longest = Math.max(calcLongestStreak(days), result.longestStreak || 0);
+      chrome.storage.local.set({ days, longestStreak: longest });
+      return;
     }
 
-    const newLongest  = calcLongestStreak(days);
-    const prevLongest = result.longestStreak || 0;
-    const longest     = Math.max(newLongest, prevLongest);
+    // New schema: write missed entry per category
+    const categories = result.categories || [{ id: DEFAULT_CAT_ID }];
+    if (!days[yesterdayKey]) days[yesterdayKey] = {};
 
-    chrome.storage.local.set({ days, longestStreak: longest }, () => {
-      console.log(`[Streak] Rollover complete. longestStreak=${longest}`);
-    });
+    for (const cat of categories) {
+      if (!days[yesterdayKey][cat.id]) {
+        days[yesterdayKey][cat.id] = { completed: false, entries: [] };
+      }
+    }
+
+    // Recompute longest streak per category
+    const longestStreaks = { ...(result.longestStreaks || {}) };
+    for (const cat of categories) {
+      const slice   = buildCategorySlice(days, cat.id);
+      const longest = calcLongestStreak(slice);
+      longestStreaks[cat.id] = Math.max(longest, longestStreaks[cat.id] || 0);
+    }
+
+    chrome.storage.local.set({ days, longestStreaks });
   });
 }
