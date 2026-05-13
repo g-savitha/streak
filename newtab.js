@@ -38,6 +38,8 @@ function renderSelectedCategory(catId) {
   document.querySelectorAll('.nt-cat-pill').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.catId === catId);
   });
+
+  updateMarkBtn();
 }
 
 // ─── Category pills ───────────────────────────────────────────────────────────
@@ -114,55 +116,33 @@ function renderFriendsArea(friends) {
   }
 }
 
-// ─── Notification: fire once per day if active habit not yet logged ───────────
+// ─── Mark Today ───────────────────────────────────────────────────────────────
 
-function checkAndNotify(days, categories, settings) {
-  const todayKey    = getTodayKey();
-  const today       = new Date().toDateString();
-  const lastNotified = sessionStorage.getItem('streak_notified_date');
-  if (lastNotified === today) return; // already notified this session's first open
+function isTodayLogged() {
+  const todayKey = getTodayKey();
+  return ntDays[todayKey]?.[ntActiveCatId]?.completed || false;
+}
 
-  const activeCatId = settings.activeCategoryId || (categories[0]?.id || 'reading');
+function updateMarkBtn() {
+  const btn = document.getElementById('ntMarkBtn');
+  if (!btn) return;
+  const logged = isTodayLogged();
+  btn.textContent  = logged ? 'Logged today ✓' : 'Mark Today';
+  btn.disabled     = logged;
+  btn.classList.toggle('logged', logged);
+}
 
-  let alreadyLogged;
-  // Handle either schema shape
-  const firstDayVal = Object.values(days)[0];
-  const isOldSchema = firstDayVal && typeof firstDayVal.completed === 'boolean';
-  if (isOldSchema) {
-    alreadyLogged = days[todayKey]?.completed;
-  } else {
-    alreadyLogged = days[todayKey]?.[activeCatId]?.completed;
-  }
+function markToday() {
+  if (isTodayLogged()) return;
+  const todayKey = getTodayKey();
+  if (!ntDays[todayKey]) ntDays[todayKey] = {};
+  ntDays[todayKey][ntActiveCatId] = { completed: true, entries: [] };
 
-  if (alreadyLogged) return;
-
-  sessionStorage.setItem('streak_notified_date', today);
-
-  const cat = categories.find(c => c.id === activeCatId) || categories[0];
-  const catLabel = cat ? `${cat.emoji} ${cat.name}` : 'your habit';
-
-  const MESSAGES = [
-    `Don't break your streak! Log ${catLabel} before midnight 🔥`,
-    `Your streak is waiting — a few minutes for ${catLabel} keeps it alive 💪`,
-    `Keep it going! Log ${catLabel} today and stay on track 🌟`,
-    `Small wins add up. Log ${catLabel} today! ✨`,
-  ];
-  const msg = MESSAGES[new Date().getDate() % MESSAGES.length];
-
-  if (Notification.permission === 'granted') {
-    new Notification("Don't break your streak! 🔥", {
-      body:    msg,
-      icon:    '/icons/icon128.png',
-      silent:  false,
-      tag:     'streak-daily',
-    });
-  } else if (Notification.permission === 'default') {
-    Notification.requestPermission().then(perm => {
-      if (perm === 'granted') {
-        new Notification("Don't break your streak! 🔥", { body: msg, tag: 'streak-daily' });
-      }
-    });
-  }
+  chrome.storage.local.set({ days: ntDays }, () => {
+    renderSelectedCategory(ntActiveCatId);
+    renderAllHabits();
+    updateMarkBtn();
+  });
 }
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
@@ -190,8 +170,8 @@ chrome.storage.local.get(['days', 'categories', 'settings', 'friends'], (result)
   const friends = (result.friends || []).filter(Boolean);
   renderFriendsArea(friends);
 
-  // Notify on tab open (once per day)
-  checkAndNotify(ntDays, ntCategories, settings);
+  updateMarkBtn();
+  document.getElementById('ntMarkBtn').addEventListener('click', markToday);
 });
 
 document.getElementById('themeToggle').addEventListener('click', () => {

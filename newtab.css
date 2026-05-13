@@ -301,11 +301,27 @@ body {
   justify-content: center;
 }
 
-.open-popup-link {
-  font-size: 11px;
-  color: var(--subtle);
-  text-decoration: none;
+.nt-mark-btn {
+  padding: 10px 32px;
+  background: linear-gradient(135deg, var(--grad-start), var(--grad-end));
+  border: none;
+  border-radius: 24px;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
   letter-spacing: 0.5px;
-  transition: color 0.15s ease;
+  box-shadow: 0 2px 16px rgba(249,115,22,0.35);
+  transition: opacity 0.15s ease, box-shadow 0.15s ease;
 }
-.open-popup-link:hover { color: var(--label); }
+.nt-mark-btn:hover:not(:disabled) { opacity: 0.88; box-shadow: 0 4px 20px rgba(249,115,22,0.5); }
+.nt-mark-btn.logged,
+.nt-mark-btn:disabled {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--label);
+  box-shadow: none;
+  cursor: default;
+  font-weight: 500;
+}
