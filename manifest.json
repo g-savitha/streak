@@ -3,7 +3,7 @@
   "name": "Streak",
   "version": "3.0.0",
   "description": "Track your daily habits and streaks.",
-  "permissions": ["storage", "alarms", "notifications"],
+  "permissions": ["storage", "alarms"],
   "action": {
     "default_popup": "popup.html",
     "default_icon": {

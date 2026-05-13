@@ -91,8 +91,8 @@ function getNextAlarmTime(hour, minute = 0) {
   return next.getTime();
 }
 
-// Notification is now triggered from newtab.js on tab open (once per day).
 // Background only handles the midnight rollover alarm.
+// Notifications were removed in v3 — users see their streak on every new tab open.
 
 function scheduleAlarms() {
   chrome.alarms.getAll((existingAlarms) => {

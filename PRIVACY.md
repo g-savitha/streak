@@ -1,6 +1,6 @@
 # Privacy Policy — Streak Chrome Extension
 
-_Last updated: May 12, 2026_
+_Last updated: May 13, 2026_
 
 ---
 
@@ -14,10 +14,11 @@ Streak does not collect, transmit, or share any personal data. Everything stays 
 
 Streak stores the following data **locally on your device** using Chrome's built-in `chrome.storage.local` API:
 
-- A log of which days you marked as complete (`true` or `false` per calendar date)
-- Optional notes you write about what you read on a given day
-- Your longest streak count
-- Your app preferences (theme)
+- A log of which days you marked each habit as complete
+- Optional timestamped notes you add per habit per day
+- Per-habit longest streak counts
+- Your app preferences (theme, active category, display name)
+- Friend challenge data you choose to save (name and streak stats only — no contact info)
 
 This data never leaves your device. It is not sent to any server, not shared with any third party, and not accessible to the developer.
 
@@ -33,9 +34,8 @@ This data never leaves your device. It is not sent to any server, not shared wit
 
 | Permission | Why it's needed |
 |---|---|
-| `storage` | Saves your reading log and preferences locally on your device |
-| `alarms` | Schedules a daily 9 PM reminder and a midnight rollover check |
-| `notifications` | Sends a single daily reminder if you haven't logged your reading yet |
+| `storage` | Saves your habit log and preferences locally on your device |
+| `alarms` | Schedules a midnight rollover check to seal missed days |
 
 No permission is used for any purpose beyond what is described above.
 

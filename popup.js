@@ -9,7 +9,7 @@
  *   • Schema migration from v2 flat days → nested days[date][catId]
  *
  * Data flow:
- *   chrome.storage.local → appDays / appCategories / appFriend → render → DOM
+ *   chrome.storage.local → appDays / appCategories / appFriends → render → DOM
  *   User action → update in-memory → chrome.storage.local.set → re-render
  */
 
