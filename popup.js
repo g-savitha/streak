@@ -1,5 +1,5 @@
 /**
- * popup.js — Streak Extension v3 UI
+ * popup.js — Hustler Extension v3 UI
  *
  * New in v3:
  *   • Multi-category habit tracking (create any habit, independent streaks)
@@ -42,7 +42,7 @@ const DEFAULT_CATEGORY = { id: 'reading', name: 'Reading', emoji: '📚', create
 const CELEBRATION_QUOTES = [
   "🎉 You showed up today. That's everything.",
   "🔥 Another day, another victory. You're on fire!",
-  "✨ Streak alive! Your future self is proud of you.",
+  "✨ Hustler alive! Your future self is proud of you.",
   "🌟 That's what consistency looks like. Keep it up!",
   "💪 Done! You're building something extraordinary.",
   "🚀 One more day added to your legend. Let's go!",
@@ -852,7 +852,7 @@ function buildShareCanvas() {
   ctx.fillStyle = colours.footer;
   ctx.font = '400 12px system-ui, sans-serif';
   ctx.letterSpacing = '0.5px';
-  ctx.fillText('Keep going. — streak', 40, H - 24);
+  ctx.fillText('Keep going. — hustler', 40, H - 24);
 
   return canvas;
 }
@@ -863,7 +863,7 @@ function downloadShareCard() {
     const url  = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href     = url;
-    link.download = 'my-streak.png';
+    link.download = 'my-hustler.png';
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }, 'image/png');

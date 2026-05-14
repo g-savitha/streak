@@ -1,4 +1,4 @@
-# Streak
+# Hustler
 
 A Chrome extension for tracking daily habits and streaks. Mark any habit complete each day, add timestamped notes, and watch per-habit streaks grow — all without an account or a server.
 

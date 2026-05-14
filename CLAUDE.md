@@ -1,4 +1,4 @@
-# CLAUDE.md — Streak Chrome Extension: Agent Instructions
+# CLAUDE.md — Hustler Chrome Extension: Agent Instructions
 
 Read this before making any changes. It defines the architecture, schema, and invariants that every agent must respect.
 
@@ -6,7 +6,7 @@ Read this before making any changes. It defines the architecture, schema, and in
 
 ## Project snapshot
 
-Streak is a vanilla JS Chrome extension (Manifest V3) for daily habit tracking. It overrides the new tab page to show streaks as a wallpaper and provides a popup for detailed logging. There is no backend, no npm, no build step, and no external dependencies. All state lives in `chrome.storage.local`. The extension loads directly as unpacked source.
+Hustler is a vanilla JS Chrome extension (Manifest V3) for daily habit tracking. It overrides the new tab page to show streaks as a wallpaper and provides a popup for detailed logging. There is no backend, no npm, no build step, and no external dependencies. All state lives in `chrome.storage.local`. The extension loads directly as unpacked source.
 
 ---
 

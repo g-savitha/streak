@@ -1,5 +1,5 @@
 /**
- * background.js — Streak Extension v3 Service Worker
+ * background.js — Hustler Extension v3 Service Worker
  *
  * Responsibilities:
  *   1. Schedule two daily alarms on install/startup:

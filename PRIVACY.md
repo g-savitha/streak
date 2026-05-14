@@ -1,4 +1,4 @@
-# Privacy Policy — Streak Chrome Extension
+# Privacy Policy — Hustler Chrome Extension
 
 _Last updated: May 13, 2026_
 
@@ -6,13 +6,13 @@ _Last updated: May 13, 2026_
 
 ## Summary
 
-Streak does not collect, transmit, or share any personal data. Everything stays on your device.
+Hustler does not collect, transmit, or share any personal data. Everything stays on your device.
 
 ---
 
 ## What data is stored
 
-Streak stores the following data **locally on your device** using Chrome's built-in `chrome.storage.local` API:
+Hustler stores the following data **locally on your device** using Chrome's built-in `chrome.storage.local` API:
 
 - A log of which days you marked each habit as complete
 - Optional timestamped notes you add per habit per day
@@ -41,11 +41,11 @@ No permission is used for any purpose beyond what is described above.
 
 ## Third parties
 
-Streak does not integrate with any third-party services, analytics platforms, or advertising networks.
+Hustler does not integrate with any third-party services, analytics platforms, or advertising networks.
 
 ## Data deletion
 
-To delete all data stored by Streak, go to `chrome://extensions`, find Streak, and click **Remove**. This permanently deletes all locally stored data.
+To delete all data stored by Hustler, go to `chrome://extensions`, find Hustler, and click **Remove**. This permanently deletes all locally stored data.
 
 ## Changes to this policy
 

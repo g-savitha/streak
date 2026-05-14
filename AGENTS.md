@@ -1,4 +1,4 @@
-# AGENTS.md — Streak Extension: Product History & Context
+# AGENTS.md — Hustler Extension: Product History & Context
 
 This file records what was built, why key decisions were made, and what the product looked like at each version. It is the product memory, not the coding guide — see [CLAUDE.md](CLAUDE.md) for coding conventions, architecture, and schema reference.
 
